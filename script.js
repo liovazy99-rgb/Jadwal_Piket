@@ -92,7 +92,7 @@ document.addEventListener('DOMContentLoaded', function() {
     ];
     const REGU_CYCLE = ['masuk', 'cadangan', 'off'];
     const REGU_STATUS = {
-        masuk: { badge: 'P', label: 'Masuk' },
+        masuk: { badge: 'M', label: 'Masuk' },
         cadangan: { badge: 'C', label: 'Cadangan' },
         off: { badge: 'O', label: 'Off' }
     };
@@ -254,7 +254,8 @@ document.addEventListener('DOMContentLoaded', function() {
             '&timeMin=' + encodeURIComponent((y - 2) + '-01-01T00:00:00Z') +
             '&timeMax=' + encodeURIComponent((y + 3) + '-12-31T23:59:59Z') +
             '&singleEvents=true&orderBy=startTime&maxResults=2500';
-        return fetch(url)
+        // Kirim alamat halaman lengkap sebagai referrer supaya cocok dengan batasan kunci yang memakai path
+        return fetch(url, { referrerPolicy: 'no-referrer-when-downgrade' })
             .then(res => {
                 if (!res.ok) throw new Error('Google HTTP ' + res.status);
                 return res.json();
