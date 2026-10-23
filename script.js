@@ -275,14 +275,13 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!id) return null;
         const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
         const diff = Math.round((d - reguStart(id)) / 86400000);
-        return diff < 0 ? null : REGU_CYCLE[diff % 3];
+        return REGU_CYCLE[((diff % 3) + 3) % 3];   // pola yang sama berlaku juga mundur ke tanggal sebelum mulai
     }
 
     // Tanggal masuk berikutnya (hari ini bila sedang masuk)
     function nextReguDuty(from, id) {
         if (!id) return null;
         const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-        if (d < reguStart(id)) return reguStart(id);
         for (let i = 0; i < 3; i++) {
             const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i);
             if (reguStatus(x, id) === 'masuk') return x;
