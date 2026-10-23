@@ -89,7 +89,7 @@ document.addEventListener('DOMContentLoaded', function() {
     ];
     const REGU_CYCLE = ['masuk', 'cadangan', 'off'];
     const REGU_STATUS = {
-        masuk: { badge: 'M', label: 'Masuk' },
+        masuk: { badge: 'P', label: 'Masuk' },
         cadangan: { badge: 'C', label: 'Cadangan' },
         off: { badge: 'O', label: 'Off' }
     };
