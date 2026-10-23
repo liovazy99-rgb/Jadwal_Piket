@@ -141,6 +141,21 @@ document.addEventListener('DOMContentLoaded', function() {
     let prayerState = '';                             // '', 'loading', 'ok', 'fail'
     let prayerLoading = false;
     let prayerLastSig = '';
+    const WX_LAT = -6.1086, WX_LON = 106.8805;      // Tanjung Priok, Jakarta Utara
+    const WX_KEY = 'weather_v1';
+    const WX_TTL = 30 * 60 * 1000;
+    let wxData = null;
+
+    const WX_CODES = {
+        0: ['☀️', 'Cerah'], 1: ['🌤️', 'Cerah berawan'], 2: ['⛅', 'Berawan sebagian'], 3: ['☁️', 'Berawan'],
+        45: ['🌫️', 'Kabut'], 48: ['🌫️', 'Kabut'],
+        51: ['🌦️', 'Gerimis ringan'], 53: ['🌦️', 'Gerimis'], 55: ['🌦️', 'Gerimis lebat'],
+        56: ['🌦️', 'Gerimis beku'], 57: ['🌦️', 'Gerimis beku'],
+        61: ['🌧️', 'Hujan ringan'], 63: ['🌧️', 'Hujan sedang'], 65: ['🌧️', 'Hujan lebat'],
+        66: ['🌧️', 'Hujan beku'], 67: ['🌧️', 'Hujan beku'],
+        80: ['🌦️', 'Hujan lokal ringan'], 81: ['🌧️', 'Hujan lokal'], 82: ['⛈️', 'Hujan lokal lebat'],
+        95: ['⛈️', 'Badai petir'], 96: ['⛈️', 'Petir & es'], 99: ['⛈️', 'Petir & es lebat']
+    };
 
     // Catatan harian: { 'YYYY-MM-DD': [ { id, title, body, color, pinned, done, createdAt, updatedAt } ] }
     const NOTES_KEY = 'dailyNotes_v1';
@@ -166,6 +181,7 @@ document.addEventListener('DOMContentLoaded', function() {
         initSetup();
         initPrayer();
         initNotes();
+        initWeather();
 
         // Tahun di footer mengikuti tahun berjalan
         const footerYear = document.getElementById('footer-year');
@@ -1214,6 +1230,200 @@ document.addEventListener('DOMContentLoaded', function() {
         setInterval(() => {
             if (renderNotesPanel.key !== dateKey(new Date())) renderNotesPanel();
         }, 60000);
+    }
+
+    // ===== Kondisi udara & cuaca (Open-Meteo, tanpa API key) =====
+    function wxInfo(code) { return WX_CODES[code] || ['🌡️', 'Tidak diketahui']; }
+
+    // Skala US AQI
+    function aqiInfo(v) {
+        if (v == null || isNaN(v)) return { label: 'Tidak tersedia', color: '#858796', tip: 'Data kualitas udara belum tersedia.' };
+        if (v <= 50) return { label: 'Baik', color: '#1cc88a', tip: 'Udara bersih, aman untuk beraktivitas di luar.' };
+        if (v <= 100) return { label: 'Sedang', color: '#f6c23e', tip: 'Dapat diterima. Orang yang sangat sensitif sebaiknya mengurangi aktivitas berat di luar.' };
+        if (v <= 150) return { label: 'Tidak sehat bagi kelompok sensitif', color: '#fd7e14', tip: 'Anak-anak, lansia, dan penderita asma/jantung sebaiknya membatasi aktivitas di luar. Pakai masker bila perlu.' };
+        if (v <= 200) return { label: 'Tidak sehat', color: '#e74a3b', tip: 'Kurangi aktivitas berat di luar ruangan dan gunakan masker.' };
+        if (v <= 300) return { label: 'Sangat tidak sehat', color: '#8e44ad', tip: 'Hindari aktivitas di luar ruangan. Gunakan masker.' };
+        return { label: 'Berbahaya', color: '#7b1e3a', tip: 'Tetap di dalam ruangan.' };
+    }
+
+    function wxFetchJSON(url) {
+        return fetch(url, { cache: 'no-store' }).then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        });
+    }
+
+    function loadWeather(force) {
+        let cached = null;
+        try { cached = JSON.parse(localStorage.getItem(WX_KEY) || 'null'); } catch (e) {}
+        if (cached && cached.data) {
+            wxData = cached.data;
+            wxData.fetchedAt = cached.t;
+            renderWeather();
+        }
+        if (!force && cached && Date.now() - cached.t < WX_TTL) return Promise.resolve();
+
+        const tz = 'timezone=Asia%2FJakarta';
+        const ll = `latitude=${WX_LAT}&longitude=${WX_LON}`;
+        const now = wxFetchJSON(`https://api.open-meteo.com/v1/forecast?${ll}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation` +
+            `&hourly=temperature_2m,precipitation_probability,weather_code&forecast_days=2&${tz}`);
+        const daily = wxFetchJSON(`https://api.open-meteo.com/v1/forecast?${ll}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum` +
+            `&past_days=31&forecast_days=16&${tz}`);
+        const air = wxFetchJSON(`https://air-quality-api.open-meteo.com/v1/air-quality?${ll}&current=us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide&${tz}`);
+
+        return Promise.allSettled([now, daily, air]).then(([a, b, c]) => {
+            if (a.status !== 'fulfilled' && b.status !== 'fulfilled' && c.status !== 'fulfilled') throw new Error('offline');
+            const prev = wxData || {};
+            wxData = {
+                now: a.status === 'fulfilled' ? a.value : prev.now,
+                daily: b.status === 'fulfilled' ? b.value : prev.daily,
+                air: c.status === 'fulfilled' ? c.value : prev.air,
+                fetchedAt: Date.now()
+            };
+            try { localStorage.setItem(WX_KEY, JSON.stringify({ t: wxData.fetchedAt, data: { now: wxData.now, daily: wxData.daily, air: wxData.air } })); } catch (e) {}
+            renderWeather();
+        }).catch(() => {
+            const el = document.getElementById('wx-status');
+            if (el) el.textContent = wxData ? '⚠ Gagal memperbarui, memakai data terakhir' : '⚠ Cuaca gagal dimuat (cek koneksi)';
+        });
+    }
+
+    function wxNum(v, d) { return v == null || isNaN(v) ? '–' : Number(v).toFixed(d || 0); }
+
+    function renderWeather() {
+        const card = document.getElementById('wx-card');
+        if (!card || !wxData) return;
+        const cur = wxData.now && wxData.now.current;
+        const air = wxData.air && wxData.air.current;
+        if (cur) {
+            const [icon, label] = wxInfo(cur.weather_code);
+            document.getElementById('wx-icon').textContent = icon;
+            document.getElementById('wx-temp').textContent = wxNum(cur.temperature_2m) + '°C';
+            document.getElementById('wx-desc').textContent = label;
+            document.getElementById('wx-extra').textContent =
+                `Terasa ${wxNum(cur.apparent_temperature)}° • Lembap ${wxNum(cur.relative_humidity_2m)}% • Angin ${wxNum(cur.wind_speed_10m)} km/j`;
+        }
+        const aqi = aqiInfo(air ? air.us_aqi : null);
+        const badge = document.getElementById('wx-aqi');
+        badge.style.setProperty('--aqi-color', aqi.color);
+        document.getElementById('wx-aqi-val').textContent = air && air.us_aqi != null ? Math.round(air.us_aqi) : '–';
+        document.getElementById('wx-aqi-label').textContent = aqi.label;
+        const st = document.getElementById('wx-status');
+        st.textContent = wxData.fetchedAt
+            ? 'Diperbarui ' + new Date(wxData.fetchedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '';
+        if (isShown('wx-modal')) renderWeatherDetail();
+    }
+
+    // Detail: hari ini (per jam + polutan) dan bulan ini (per hari)
+    function renderWeatherDetail() {
+        if (!wxData) return;
+        const cur = wxData.now && wxData.now.current;
+        const air = wxData.air && wxData.air.current;
+        const nowStr = cur && cur.time ? cur.time : null;     // "YYYY-MM-DDTHH:MM" (WIB)
+        const todayKey = nowStr ? nowStr.slice(0, 10) : dateKey(new Date());
+
+        // --- Hari ini ---
+        const box = document.getElementById('wx-today');
+        box.innerHTML = '';
+        if (cur) {
+            const [icon, label] = wxInfo(cur.weather_code);
+            const hero = document.createElement('div');
+            hero.className = 'wx-hero';
+            hero.innerHTML = `<div class="wx-hero-icon">${icon}</div><div><div class="wx-hero-temp">${wxNum(cur.temperature_2m)}°C</div>` +
+                `<div>${label}</div><div class="wx-hero-sub">Terasa ${wxNum(cur.apparent_temperature)}° • Lembap ${wxNum(cur.relative_humidity_2m)}% • Angin ${wxNum(cur.wind_speed_10m)} km/j</div></div>`;
+            box.appendChild(hero);
+        }
+        const aqi = aqiInfo(air ? air.us_aqi : null);
+        const aq = document.createElement('div');
+        aq.className = 'wx-aq';
+        aq.style.setProperty('--aqi-color', aqi.color);
+        const pol = air ? [['PM2.5', air.pm2_5, 'µg/m³'], ['PM10', air.pm10, 'µg/m³'], ['O₃', air.ozone, 'µg/m³'],
+            ['NO₂', air.nitrogen_dioxide, 'µg/m³'], ['SO₂', air.sulphur_dioxide, 'µg/m³'], ['CO', air.carbon_monoxide, 'µg/m³']] : [];
+        aq.innerHTML = `<div class="wx-aq-head"><span class="wx-aq-val">${air && air.us_aqi != null ? Math.round(air.us_aqi) : '–'}</span>` +
+            `<div><div class="wx-aq-title">Kualitas Udara (US AQI)</div><div class="wx-aq-label"></div></div></div>` +
+            `<div class="wx-aq-tip"></div><div class="wx-pol">` +
+            pol.map(p => `<div><span>${p[0]}</span><strong>${wxNum(p[1], 1)}</strong><small>${p[2]}</small></div>`).join('') + '</div>';
+        aq.querySelector('.wx-aq-label').textContent = aqi.label;
+        aq.querySelector('.wx-aq-tip').textContent = aqi.tip;
+        box.appendChild(aq);
+
+        const hourly = wxData.now && wxData.now.hourly;
+        if (hourly && hourly.time) {
+            const title = document.createElement('div');
+            title.className = 'wx-sub';
+            title.textContent = 'Perkiraan per jam';
+            box.appendChild(title);
+            const strip = document.createElement('div');
+            strip.className = 'wx-hours';
+            const startIdx = hourly.time.findIndex(t => nowStr && t >= nowStr.slice(0, 13) + ':00');
+            hourly.time.slice(Math.max(startIdx, 0), Math.max(startIdx, 0) + 24).forEach((t, i) => {
+                const k = Math.max(startIdx, 0) + i;
+                const item = document.createElement('div');
+                item.className = 'wx-hour' + (i === 0 ? ' now' : '');
+                item.innerHTML = `<span>${i === 0 ? 'Kini' : t.slice(11, 16)}</span><div>${wxInfo(hourly.weather_code[k])[0]}</div>` +
+                    `<strong>${wxNum(hourly.temperature_2m[k])}°</strong><small>💧${wxNum(hourly.precipitation_probability[k])}%</small>`;
+                strip.appendChild(item);
+            });
+            box.appendChild(strip);
+        }
+
+        // --- Bulan ini ---
+        const mbox = document.getElementById('wx-month');
+        mbox.innerHTML = '';
+        const [ty, tm] = todayKey.split('-').map(Number);
+        const dl = wxData.daily && wxData.daily.daily;
+        document.getElementById('wx-month-title').textContent =
+            new Date(ty, tm - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+        const byDate = {};
+        if (dl && dl.time) dl.time.forEach((t, i) => { byDate[t] = i; });
+        const first = new Date(ty, tm - 1, 1).getDay();
+        const total = new Date(ty, tm, 0).getDate();
+        ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'].forEach(n => {
+            const h = document.createElement('div'); h.className = 'wx-dow'; h.textContent = n; mbox.appendChild(h);
+        });
+        for (let i = 0; i < first; i++) mbox.appendChild(document.createElement('div'));
+        for (let d = 1; d <= total; d++) {
+            const key = `${ty}-${String(tm).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            const i = byDate[key];
+            const cell = document.createElement('div');
+            cell.className = 'wx-day' + (key === todayKey ? ' today' : '') + (key < todayKey ? ' past' : '');
+            if (i == null) {
+                cell.innerHTML = `<b>${d}</b><div class="wx-na">–</div>`;
+                cell.title = 'Prakiraan belum tersedia';
+            } else {
+                const [icon, label] = wxInfo(dl.weather_code[i]);
+                cell.innerHTML = `<b>${d}</b><div class="wx-day-icon">${icon}</div>` +
+                    `<strong>${wxNum(dl.temperature_2m_max[i])}°</strong><small>${wxNum(dl.temperature_2m_min[i])}°</small>` +
+                    `<small>💧${wxNum(dl.precipitation_probability_max[i])}%</small>`;
+                cell.title = `${label}\nSuhu ${wxNum(dl.temperature_2m_min[i])}–${wxNum(dl.temperature_2m_max[i])}°C\n` +
+                    `Peluang hujan ${wxNum(dl.precipitation_probability_max[i])}% • Curah ${wxNum(dl.precipitation_sum[i], 1)} mm`;
+            }
+            mbox.appendChild(cell);
+        }
+        const note = document.getElementById('wx-month-note');
+        note.textContent = 'Prakiraan tersedia sekitar 16 hari ke depan; tanggal setelahnya ditandai "–". Tanggal lalu memakai data model cuaca.';
+    }
+
+    function openWeatherDetail() {
+        document.getElementById('wx-modal').style.display = 'flex';
+        renderWeatherDetail();
+        loadWeather(false);
+    }
+
+    function initWeather() {
+        const $ = x => document.getElementById(x);
+        if (!$('wx-card')) return;
+        $('wx-detail-btn').addEventListener('click', openWeatherDetail);
+        $('wx-close').addEventListener('click', () => { $('wx-modal').style.display = 'none'; });
+        $('wx-modal').addEventListener('click', e => { if (e.target === $('wx-modal')) $('wx-modal').style.display = 'none'; });
+        document.querySelectorAll('#wx-tabs .note-chip').forEach(btn => btn.addEventListener('click', () => {
+            document.querySelectorAll('#wx-tabs .note-chip').forEach(b => b.classList.toggle('active', b === btn));
+            $('wx-pane-today').hidden = btn.dataset.tab !== 'today';
+            $('wx-pane-month').hidden = btn.dataset.tab !== 'month';
+        }));
+        document.addEventListener('keydown', e => { if (e.key === 'Escape' && isShown('wx-modal')) $('wx-modal').style.display = 'none'; });
+        loadWeather(false);
+        setInterval(() => loadWeather(false), 10 * 60 * 1000);
     }
 
     // ===== Waktu solat 5 waktu =====
