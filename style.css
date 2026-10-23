@@ -2849,3 +2849,320 @@ input.switch:focus-visible {
 .note-editor h2 {
     margin-bottom: 1rem;
 }
+
+
+/* =====================================================================
+   KONDISI UDARA & CUACA + HURUF C
+   ===================================================================== */
+
+.wx-card {
+    flex-shrink: 0;
+    margin-bottom: 1rem;
+    padding: 0.9rem;
+    border-radius: 0.8rem;
+    color: #fff;
+    background: linear-gradient(135deg, #2b6cb0, #4e73df 55%, #6f42c1);
+    box-shadow: 0 0.3rem 1rem rgba(78, 115, 223, 0.3);
+}
+
+.wx-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.wx-place {
+    font-size: 0.78rem;
+    font-weight: 700;
+    opacity: 0.95;
+}
+
+.wx-card .wx-detail-btn {
+    padding: 0.25rem 0.7rem;
+    font-size: 0.78rem;
+    border: 1px solid rgba(255, 255, 255, .5);
+    background: rgba(255, 255, 255, .18);
+    color: #fff;
+}
+
+.wx-card .wx-detail-btn:hover {
+    background: rgba(255, 255, 255, .3);
+}
+
+.wx-main {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin-top: 0.5rem;
+}
+
+.wx-icon {
+    font-size: 2.3rem;
+    line-height: 1;
+}
+
+.wx-now {
+    flex: 1;
+    min-width: 0;
+}
+
+.wx-temp {
+    font-size: 1.7rem;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.wx-desc {
+    font-size: 0.85rem;
+    opacity: 0.95;
+}
+
+.wx-extra {
+    margin-top: 0.4rem;
+    font-size: 0.72rem;
+    opacity: 0.9;
+}
+
+.wx-status {
+    margin-top: 0.15rem;
+    font-size: 0.68rem;
+    opacity: 0.75;
+}
+
+.wx-aqi {
+    --aqi-color: #858796;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 4.6rem;
+    max-width: 6rem;
+    padding: 0.35rem 0.4rem;
+    border-radius: 0.6rem;
+    background: rgba(255, 255, 255, .95);
+    color: #2d3748;
+    text-align: center;
+    border-bottom: 4px solid var(--aqi-color);
+}
+
+.wx-aqi-cap {
+    font-size: 0.62rem;
+    font-weight: 700;
+    opacity: 0.7;
+}
+
+.wx-aqi-val {
+    font-size: 1.4rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--aqi-color);
+}
+
+.wx-aqi-label {
+    font-size: 0.6rem;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.wx-hero {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.wx-hero-icon {
+    font-size: 3.2rem;
+    line-height: 1;
+}
+
+.wx-hero-temp {
+    font-size: 2.2rem;
+    font-weight: 800;
+    line-height: 1.1;
+}
+
+.wx-hero-sub {
+    font-size: 0.8rem;
+    opacity: 0.75;
+}
+
+.wx-aq {
+    --aqi-color: #858796;
+    padding: 0.9rem;
+    border: 1px solid var(--border-color);
+    border-left: 6px solid var(--aqi-color);
+    border-radius: 0.7rem;
+    background: var(--secondary-color);
+}
+
+.wx-aq-head {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.wx-aq-val {
+    min-width: 3.2rem;
+    font-size: 2rem;
+    font-weight: 800;
+    text-align: center;
+    color: var(--aqi-color);
+}
+
+.wx-aq-title {
+    font-size: 0.78rem;
+    opacity: 0.75;
+}
+
+.wx-aq-label {
+    font-weight: 800;
+    color: var(--aqi-color);
+}
+
+.wx-aq-tip {
+    margin: 0.5rem 0;
+    font-size: 0.82rem;
+}
+
+.wx-pol {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+}
+
+.wx-pol>div {
+    padding: 0.4rem;
+    border-radius: 0.5rem;
+    background: var(--card-bg);
+    text-align: center;
+}
+
+.wx-pol span {
+    display: block;
+    font-size: 0.7rem;
+    opacity: 0.7;
+}
+
+.wx-pol strong {
+    font-size: 1rem;
+}
+
+.wx-pol small {
+    display: block;
+    font-size: 0.6rem;
+    opacity: 0.6;
+}
+
+.wx-sub {
+    margin: 1rem 0 0.5rem;
+    font-weight: 800;
+}
+
+.wx-hours {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    padding-bottom: 0.4rem;
+}
+
+.wx-hour {
+    flex: 0 0 4rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    padding: 0.5rem 0.2rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.6rem;
+    background: var(--secondary-color);
+    font-size: 0.75rem;
+}
+
+.wx-hour.now {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px var(--primary-color);
+}
+
+.wx-hour div {
+    font-size: 1.3rem;
+}
+
+.wx-hour small {
+    opacity: 0.75;
+    font-size: 0.65rem;
+}
+
+.wx-month {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 0.3rem;
+}
+
+.wx-dow {
+    text-align: center;
+    font-size: 0.7rem;
+    font-weight: 800;
+    opacity: 0.7;
+}
+
+.wx-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.05rem;
+    min-height: 5.4rem;
+    padding: 0.3rem 0.1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    background: var(--secondary-color);
+    font-size: 0.7rem;
+}
+
+.wx-day b {
+    font-size: 0.75rem;
+    align-self: flex-start;
+    margin-left: 0.25rem;
+}
+
+.wx-day.today {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px var(--primary-color);
+}
+
+.wx-day.past {
+    opacity: 0.75;
+}
+
+.wx-day-icon {
+    font-size: 1.2rem;
+}
+
+.wx-day small {
+    opacity: 0.75;
+    font-size: 0.62rem;
+}
+
+.wx-na {
+    margin-top: 1rem;
+    opacity: 0.5;
+}
+
+@media (max-width: 576px) {
+    .wx-month {
+        gap: 0.15rem;
+    }
+
+    .wx-day {
+        min-height: 4.6rem;
+        font-size: 0.62rem;
+    }
+
+    .wx-day small {
+        font-size: 0.55rem;
+    }
+
+    .wx-pol {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
