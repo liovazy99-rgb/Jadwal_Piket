@@ -1,0 +1,2817 @@
+document.addEventListener('DOMContentLoaded', function() {
+    // DOM Elements
+    const calendarView = document.getElementById('calendar-view');
+    const eventsList = document.getElementById('events-list');
+    const currentDateElement = document.getElementById('current-date');
+    const todayBtn = document.getElementById('today-btn');
+    const prevBtn = document.getElementById('prev-btn');
+    const nextBtn = document.getElementById('next-btn');
+    const viewOptions = document.querySelectorAll('.view-option');
+    const addEventBtn = document.getElementById('add-event-btn');
+    const eventModal = document.getElementById('event-modal');
+    const eventDetailsModal = document.getElementById('event-details-modal');
+    const closeBtns = document.querySelectorAll('.close-btn');
+    const eventForm = document.getElementById('event-form');
+    const eventTitleInput = document.getElementById('event-title');
+    const eventDateInput = document.getElementById('event-date');
+    const eventStartTimeInput = document.getElementById('event-start-time');
+    const eventEndTimeInput = document.getElementById('event-end-time');
+    const eventDescriptionInput = document.getElementById('event-description');
+    const eventColorInput = document.getElementById('event-color');
+    const eventAlarmInput = document.getElementById('event-alarm');
+    const eventAlarmBeforeSelect = document.getElementById('event-alarm-before');
+    const detailsAlarm = document.getElementById('details-alarm');
+    const alarmOverlay = document.getElementById('alarm-overlay');
+    const alarmCard = document.getElementById('alarm-card');
+    const alarmWhenEl = document.getElementById('alarm-when');
+    const alarmTitleEl = document.getElementById('alarm-title');
+    const alarmTimeEl = document.getElementById('alarm-time');
+    const alarmDescEl = document.getElementById('alarm-desc');
+    const alarmQueueEl = document.getElementById('alarm-queue');
+    const alarmSnoozeBtn = document.getElementById('alarm-snooze');
+    const alarmDismissBtn = document.getElementById('alarm-dismiss');
+    const alarmPickBtn = document.getElementById('alarm-pick-btn');
+    const alarmTestBtn = document.getElementById('alarm-test-btn');
+    const alarmResetBtn = document.getElementById('alarm-reset-btn');
+    const alarmFileInput = document.getElementById('alarm-file');
+    const alarmVolumeInput = document.getElementById('alarm-volume');
+    const alarmSoundName = document.getElementById('alarm-sound-name');
+    const alarmStatus = document.getElementById('alarm-status');
+    const notifBtn = document.getElementById('notif-btn');
+    const alarmEditBtn = document.getElementById('alarm-edit-btn');
+    const rtModal = document.getElementById('ringtone-modal');
+    const rtClose = document.getElementById('rt-close');
+    const rtFile = document.getElementById('rt-file');
+    const rtCanvas = document.getElementById('rt-canvas');
+    const rtWaveMsg = document.getElementById('rt-wave-msg');
+    const rtNow = document.getElementById('rt-now');
+    const rtTotal = document.getElementById('rt-total');
+    const rtStart = document.getElementById('rt-start');
+    const rtEnd = document.getElementById('rt-end');
+    const rtStartLabel = document.getElementById('rt-start-label');
+    const rtEndLabel = document.getElementById('rt-end-label');
+    const rtLength = document.getElementById('rt-length');
+    const rtSetStart = document.getElementById('rt-set-start');
+    const rtSetEnd = document.getElementById('rt-set-end');
+    const rtTestBtn = document.getElementById('rt-test');
+    const rtSaveBtn = document.getElementById('rt-save');
+    const detailsTitle = document.getElementById('details-title');
+    const detailsDate = document.getElementById('details-date');
+    const detailsTime = document.getElementById('details-time');
+    const detailsDescription = document.getElementById('details-description');
+    const deleteEventBtn = document.getElementById('delete-event-btn');
+    const editEventBtn = document.getElementById('edit-event-btn');
+    const closeDetailsBtn = document.getElementById('close-details-btn');
+    const formTitle = document.getElementById('form-title');
+    const themeToggle = document.getElementById('theme-toggle');
+    const exportBtn = document.getElementById('export-btn');
+    const importBtn = document.getElementById('import-btn');
+    const importFile = document.getElementById('import-file');
+    const backupStatus = document.getElementById('backup-status');
+
+    // ===== Konfigurasi =====
+    const HOLIDAY_API = 'https://api.kemendesa.link/libur-nasional/api/holidays/latest';
+    // Urutan percobaan: API langsung -> holidays.json (disegarkan otomatis dari API oleh GitHub Actions)
+    // -> proxy CORS publik. Berhenti di sumber pertama yang berhasil.
+    const HOLIDAY_SOURCES = [
+        HOLIDAY_API,
+        'holidays.json',
+        'https://api.allorigins.win/raw?url=' + encodeURIComponent(HOLIDAY_API)
+    ];
+    const HOLIDAY_CACHE_KEY = 'holidays_cache'; // salinan terakhir hasil API (bukan data manual)
+    // ===== Jadwal regu (siklus 3 hari: masuk -> cadangan -> off) =====
+    // Regu 1 mulai masuk 23 Okt 2026, Regu 2 tanggal 24, Regu 3 tanggal 25, lalu berulang tiap 3 hari.
+    const REGU_FIRST_DUTY = new Date(2026, 9, 23);
+    const REGU = [
+        { id: 1, name: 'Regu 1', members: 'Garda Negar S & M.Andyko' },
+        { id: 2, name: 'Regu 2', members: 'Agung Susilo & Deddy Prasetya' },
+        { id: 3, name: 'Regu 3', members: 'Armin Ardi & Ibnu Faisal' }
+    ];
+    const REGU_CYCLE = ['masuk', 'cadangan', 'off'];
+    const REGU_STATUS = {
+        masuk: { badge: 'M', label: 'Masuk' },
+        cadangan: { badge: 'C', label: 'Cadangan' },
+        off: { badge: 'O', label: 'Off' }
+    };
+
+    // App State
+    let currentView = 'month';
+    let currentDate = new Date();
+    let events = JSON.parse(localStorage.getItem('events')) || [];
+    let selectedEventId = null;
+    let editingEventId = null;
+
+    // Alarm
+    const ALARM_CATCHUP_MS = 5 * 60 * 1000;   // alarm yang terlambat <= 5 menit (mis. tab sempat tertidur) tetap dibunyikan
+    const ALARM_SNOOZE_MIN = 5;
+    const ALARM_RENOTIFY_MS = 30 * 1000;       // selama alarm berbunyi & aplikasi di latar belakang, notifikasi diulang
+    const ALARM_MAX_FILE_MB = 15;
+    let alarmQueue = [];
+    let currentAlarm = null;
+    let ringer = null;
+    let audioCtx = null;
+    let customSound = null;                    // { name, url }
+    let alarmVolume = 80;
+    // Pilihan pengguna, tersimpan di perangkat supaya tidak ditanya terus
+    let userReligion = readStored('userReligion') === 'muslim' ? 'muslim' : (readStored('userReligion') === 'non' ? 'non' : '');
+    let userRegu = [1, 2, 3].includes(Number(readStored('userRegu'))) ? Number(readStored('userRegu')) : 0;
+
+    // Waktu solat. Sumber utama: MyQuran (jadwal resmi Kemenag RI, Kota Jakarta).
+    // Cadangan: Aladhan (metode 20 = Kemenag RI) memakai koordinat Tanjung Priok.
+    const PRAYER_PLACE = 'Tanjung Priok, Jakarta Utara';
+    const PRAYER_LAT = -6.1086;
+    const PRAYER_LNG = 106.8805;
+    const PRAYER_CITY_ID = 1301;               // KOTA JAKARTA di MyQuran
+    const PRAYER_CACHE_KEY = 'prayer_times_v1';
+    const PRAYERS = [
+        { key: 'subuh', name: 'Subuh', icon: '🌌' },
+        { key: 'dzuhur', name: 'Dzuhur', icon: '☀️' },
+        { key: 'ashar', name: 'Ashar', icon: '🌤️' },
+        { key: 'maghrib', name: 'Maghrib', icon: '🌇' },
+        { key: 'isya', name: 'Isya', icon: '🌙' }
+    ];
+    const PRAYER_DEFAULTS = {
+        master: true, sound: true, notif: true, before: 0, volume: 80,
+        on: { subuh: true, dzuhur: true, ashar: true, maghrib: true, isya: true }
+    };
+    let prayerSettings = readPrayerSettings();
+    let prayerTimes = readJSON(PRAYER_CACHE_KEY, {}); // { 'YYYY-MM-DD': { subuh: '04:13', ..., src: 'myquran' } }
+    let prayerSound = null;                           // { name, url, start, end }
+    let prayerViewDate = null;                        // tanggal yang sedang dilihat di popup (null = hari ini)
+    let prayerState = '';                             // '', 'loading', 'ok', 'fail'
+    let prayerLoading = false;
+    let prayerLastSig = '';
+
+    // Catatan harian: { 'YYYY-MM-DD': [ { id, title, body, color, pinned, done, createdAt, updatedAt } ] }
+    const NOTES_KEY = 'dailyNotes_v1';
+    const NOTE_COLORS = [
+        { v: '#4e73df', n: 'Biru' }, { v: '#1cc88a', n: 'Hijau' }, { v: '#f6c23e', n: 'Kuning' },
+        { v: '#e74a3b', n: 'Merah' }, { v: '#6f42c1', n: 'Ungu' }, { v: '#858796', n: 'Abu-abu' }
+    ];
+    let notes = readNotes();
+    let notesFilter = { q: '', mode: 'all' };
+    let editingNote = null;                    // { key, id } saat mengedit, null saat menambah
+
+    const baseTitle = document.title;
+    let holidays = readHolidayCache();
+
+    init();
+
+    function init() {
+        renderCalendar();
+        renderEventsList();
+        setupEventListeners();
+        loadHolidays();
+        initAlarms();
+        initSetup();
+        initPrayer();
+        initNotes();
+
+        // Tahun di footer mengikuti tahun berjalan
+        const footerYear = document.getElementById('footer-year');
+        if (footerYear) footerYear.textContent = new Date().getFullYear();
+    }
+
+    // ===== Hari libur nasional =====
+    function readHolidayCache() {
+        try {
+            return JSON.parse(localStorage.getItem(HOLIDAY_CACHE_KEY)) || {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    // Coba tiap sumber berurutan sampai ada yang berhasil.
+    function fetchHolidayJson(i = 0) {
+        if (i >= HOLIDAY_SOURCES.length) return Promise.reject(new Error('Semua sumber hari libur gagal'));
+        return fetch(HOLIDAY_SOURCES[i])
+            .then(res => {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.json();
+            })
+            .then(json => {
+                if (!json.data || !json.data.length) throw new Error('Data hari libur kosong');
+                return json;
+            })
+            .catch(err => {
+                console.warn('Sumber hari libur gagal:', HOLIDAY_SOURCES[i], err);
+                return fetchHolidayJson(i + 1);
+            });
+    }
+
+    // Hasil terakhir disimpan sebagai cache supaya tetap tampil saat offline,
+    // dan tahun-tahun sebelumnya tidak hilang ketika API berganti ke tahun berikutnya.
+    function loadHolidays() {
+        fetchHolidayJson()
+            .then(json => {
+                const map = {};
+                json.data.forEach(h => {
+                    map[h.date] = h.name + (h.is_cuti_bersama ? ' (Cuti Bersama)' : '');
+                });
+                holidays = Object.assign({}, readHolidayCache(), map);
+                try { localStorage.setItem(HOLIDAY_CACHE_KEY, JSON.stringify(holidays)); } catch (e) {}
+                showHolidayStatus(null);
+                renderCalendar();
+            })
+            .catch(err => {
+                console.warn(err);
+                showHolidayStatus(Object.keys(holidays).length
+                    ? '⚠ Hari libur: memakai data tersimpan'
+                    : '⚠ Hari libur gagal dimuat');
+            });
+    }
+
+    function showHolidayStatus(message) {
+        const header = document.querySelector('.sidebar-header');
+        if (!header) return;
+        let el = document.getElementById('holiday-status');
+        if (!message) {
+            if (el) el.remove();
+            return;
+        }
+        if (!el) {
+            el = document.createElement('span');
+            el.id = 'holiday-status';
+            el.className = 'holiday-status';
+            header.appendChild(el);
+        }
+        el.textContent = message;
+    }
+
+    function dateKey(date) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+
+    function getHolidayName(date) {
+        return holidays[dateKey(date)] || null;
+    }
+
+    function isRedDate(date) {
+        return date.getDay() === 0 || !!getHolidayName(date);
+    }
+
+    // ===== Pilihan pengguna & jadwal regu =====
+    function readStored(key) {
+        try { return localStorage.getItem(key) || ''; } catch (e) { return ''; }
+    }
+
+    function writeStored(key, value) {
+        try { localStorage.setItem(key, value); } catch (e) {}
+    }
+
+    function isMuslim() { return userReligion === 'muslim'; }
+
+    function reguDetail(id) { return REGU.find(r => r.id === id) || null; }
+
+    function reguStart(id) {
+        return new Date(REGU_FIRST_DUTY.getFullYear(), REGU_FIRST_DUTY.getMonth(), REGU_FIRST_DUTY.getDate() + (id - 1));
+    }
+
+    // 'masuk' | 'cadangan' | 'off', atau null jika tanggalnya belum masuk jadwal regu itu
+    function reguStatus(date, id) {
+        if (!id) return null;
+        const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const diff = Math.round((d - reguStart(id)) / 86400000);
+        return diff < 0 ? null : REGU_CYCLE[diff % 3];
+    }
+
+    // Tanggal masuk berikutnya (hari ini bila sedang masuk)
+    function nextReguDuty(from, id) {
+        if (!id) return null;
+        const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+        if (d < reguStart(id)) return reguStart(id);
+        for (let i = 0; i < 3; i++) {
+            const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i);
+            if (reguStatus(x, id) === 'masuk') return x;
+        }
+        return null;
+    }
+
+    function isTodayDate(date) {
+        return date.toDateString() === new Date().toDateString();
+    }
+
+    function createTodayStamp() {
+        const stamp = document.createElement('span');
+        stamp.className = 'today-stamp';
+        stamp.textContent = 'HARI INI';
+        return stamp;
+    }
+
+    function createReguBadge(date, id) {
+        const st = reguStatus(date, id);
+        if (!st) return null;
+        const r = reguDetail(id);
+        const badge = document.createElement('span');
+        badge.className = 'regu-badge ' + st;
+        badge.textContent = REGU_STATUS[st].badge;
+        badge.title = `${r.name} (${r.members}): ${REGU_STATUS[st].label}`;
+        return badge;
+    }
+
+    // Papan di tampilan Hari: status ketiga regu pada tanggal itu
+    function createReguBoard(date) {
+        if (!REGU.some(r => reguStatus(date, r.id))) return null;
+        const board = document.createElement('div');
+        board.className = 'regu-board';
+        REGU.forEach(r => {
+            const st = reguStatus(date, r.id);
+            if (!st) return;
+            const row = document.createElement('div');
+            row.className = 'regu-row' + (r.id === userRegu ? ' mine' : '');
+            row.innerHTML = `<span class="regu-badge inline ${st}">${REGU_STATUS[st].badge}</span>` +
+                `<span class="regu-row-name"><b>${r.name}</b> • ${escapeHtml(r.members)}</span>` +
+                `<span class="regu-row-status ${st}">${REGU_STATUS[st].label}</span>`;
+            board.appendChild(row);
+        });
+        return board;
+    }
+
+    // ===== Backup & restore =====
+    function showBackupStatus(message, isError) {
+        if (!backupStatus) return;
+        backupStatus.textContent = message;
+        backupStatus.classList.toggle('error', !!isError);
+        clearTimeout(showBackupStatus._t);
+        showBackupStatus._t = setTimeout(() => { backupStatus.textContent = ''; }, 6000);
+    }
+
+    function exportData() {
+        const payload = {
+            app: 'kalender-acara',
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            events,
+            notes
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `kalender-backup-${dateKey(new Date())}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showBackupStatus(`✔ ${events.length} acara dan ${countAllNotes()} catatan diekspor.`);
+    }
+
+    // Rapikan & validasi satu acara dari file backup
+    function sanitizeEvent(e) {
+        if (!e || typeof e !== 'object') return null;
+        const start = new Date(e.startTime);
+        const end = new Date(e.endTime);
+        if (isNaN(start) || isNaN(end)) return null;
+        return {
+            id: String(e.id || (Date.now().toString() + Math.random().toString(36).slice(2, 8))),
+            title: String(e.title || '(Tanpa judul)').slice(0, 200),
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            description: String(e.description || '').slice(0, 2000),
+            color: /^#[0-9a-fA-F]{6}$/.test(e.color) ? e.color : '#4e73df',
+            alarm: !!e.alarm,
+            alarmBefore: [0, 5, 10, 15, 30, 60].includes(Number(e.alarmBefore)) ? Number(e.alarmBefore) : 0
+        };
+    }
+
+    function importData(file) {
+        const reader = new FileReader();
+        reader.onerror = () => showBackupStatus('Gagal membaca file.', true);
+        reader.onload = () => {
+            let parsed;
+            try {
+                parsed = JSON.parse(reader.result);
+            } catch (err) {
+                showBackupStatus('File bukan JSON yang valid.', true);
+                return;
+            }
+
+            const noteSource = parsed && !Array.isArray(parsed) && parsed.notes && typeof parsed.notes === 'object' ? parsed.notes : null;
+            const list = Array.isArray(parsed) ? parsed
+                : parsed && Array.isArray(parsed.events) ? parsed.events
+                : noteSource ? [] : null;
+            if (!Array.isArray(list)) {
+                showBackupStatus('Format backup tidak dikenali.', true);
+                return;
+            }
+
+            const valid = list.map(sanitizeEvent).filter(Boolean);
+            const existingIds = new Set(events.map(ev => ev.id));
+            const fresh = valid.filter(ev => !existingIds.has(ev.id));
+
+            const freshNotes = collectImportNotes(noteSource);
+            const ok = confirm(
+                `Ditemukan ${valid.length} acara di file ini:\n` +
+                `• ${fresh.length} acara baru akan ditambahkan\n` +
+                `• ${valid.length - fresh.length} acara sudah ada (dilewati)\n` +
+                (noteSource ? `• ${freshNotes.length} catatan baru akan ditambahkan\n` : '') + '\n' +
+                'Data yang sudah ada di kalender tidak akan dihapus. Lanjutkan?'
+            );
+            if (!ok) return;
+
+            events = events.concat(fresh);
+            fresh.forEach(markPastAlarmFired);
+            saveEventsToStorage();
+            freshNotes.forEach(x => { (notes[x.key] = notes[x.key] || []).push(x.note); });
+            if (freshNotes.length) saveNotes();
+
+            renderCalendar();
+            renderEventsList();
+            renderNotesPanel();
+            showBackupStatus(`✔ ${fresh.length} acara` + (noteSource ? ` dan ${freshNotes.length} catatan` : '') + ' berhasil dipulihkan.');
+        };
+        reader.readAsText(file);
+    }
+
+    // ===== Alarm & notifikasi =====
+    function readJSON(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch (e) { return fallback; }
+    }
+
+    function writeJSON(key, value) {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+    }
+
+    // --- IndexedDB: tempat menyimpan file lagu (localStorage terlalu kecil untuk audio) ---
+    function idbRequest(mode, fn) {
+        return new Promise((resolve, reject) => {
+            const open = indexedDB.open('kalender-db', 1);
+            open.onupgradeneeded = () => open.result.createObjectStore('files');
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+                const db = open.result;
+                const tx = db.transaction('files', mode);
+                const req = fn(tx.objectStore('files'));
+                tx.oncomplete = () => { db.close(); resolve(req.result); };
+                tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+            };
+        });
+    }
+
+    function fmtTime(sec) {
+        sec = Math.round(Math.max(0, sec || 0) * 10) / 10;
+        const m = Math.floor(sec / 60);
+        const r = sec - m * 60;
+        return `${m}:${r.toFixed(1).padStart(4, '0')}`;
+    }
+
+    async function readSoundRecord(key, old) {
+        let next = null;
+        try {
+            const rec = await idbRequest('readonly', store => store.get(key));
+            if (rec && rec.blob) {
+                next = { name: rec.name, url: URL.createObjectURL(rec.blob), start: rec.start || 0, end: rec.end || null };
+            }
+        } catch (e) { /* tanpa IndexedDB: pakai nada bawaan */ }
+        if (old && old.url) URL.revokeObjectURL(old.url);
+        return next;
+    }
+
+    function soundLabel(snd, fallback) {
+        return snd
+            ? `🎵 ${snd.name} (${fmtTime(snd.start)} – ${snd.end ? fmtTime(snd.end) : 'akhir'})`
+            : fallback;
+    }
+
+    // Memuat nada alarm acara dan nada solat (disimpan terpisah)
+    async function loadCustomSound() {
+        customSound = await readSoundRecord('alarmSound', customSound);
+        prayerSound = await readSoundRecord('prayerSound', prayerSound);
+        if (alarmSoundName) alarmSoundName.textContent = soundLabel(customSound, '🎵 Nada bawaan (lonceng)');
+        const prayerName = document.getElementById('prayer-sound-name');
+        if (prayerName) prayerName.textContent = soundLabel(prayerSound, '🕌 Nada bawaan (lembut)');
+    }
+
+    function showAlarmStatus(message, isError) {
+        if (!alarmStatus) return;
+        alarmStatus.textContent = message;
+        alarmStatus.classList.toggle('error', !!isError);
+        clearTimeout(showAlarmStatus._t);
+        showAlarmStatus._t = setTimeout(() => { alarmStatus.textContent = ''; }, 7000);
+    }
+
+    // --- Suara ---
+    function getAudioCtx() {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        if (!audioCtx) audioCtx = new AC();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        return audioCtx;
+    }
+
+    // Nada bawaan: lonceng pendek yang diulang (dibuat langsung oleh browser, tanpa file)
+    function playChimeOnce(volume) {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        [659.25, 783.99, 1046.5, 783.99, 1046.5, 1318.5].forEach((freq, i) => {
+            const t = ctx.currentTime + i * 0.22;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.0001, t);
+            gain.gain.exponentialRampToValueAtTime(Math.max(volume, 0.01) * 0.6, t + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(t);
+            osc.stop(t + 0.55);
+        });
+    }
+
+    function updateTestButton() {
+        const prayerPreview = !!(ringer && ringer.preview && ringer.kind === 'prayer');
+        if (alarmTestBtn) alarmTestBtn.textContent = ringer && ringer.preview && !prayerPreview ? '⏹ Stop' : '▶ Coba';
+        const prayerTest = document.getElementById('prayer-test-btn');
+        if (prayerTest) prayerTest.textContent = prayerPreview ? '⏹ Stop' : '▶ Coba';
+    }
+
+    // Menyalakan suara + getar. Berulang terus sampai alarm dimatikan / ditunda.
+    function startSound() {
+        const isPrayer = !!ringer && ringer.kind === 'prayer';
+        // Alarm solat dengan suara dimatikan: hanya popup/notifikasi (cuplikan "Coba" tetap berbunyi)
+        if (isPrayer && !prayerSettings.sound && !ringer.preview) return;
+        const volume = (isPrayer ? prayerSettings.volume : alarmVolume) / 100;
+        const snd = isPrayer ? prayerSound : customSound;
+
+        if (snd) {
+            const { start, end, url } = snd;
+            const audio = new Audio(url);
+            audio.volume = volume;
+            try { audio.currentTime = start; } catch (e) {}
+            audio.addEventListener('loadedmetadata', () => {
+                try { if (audio.currentTime < start) audio.currentTime = start; } catch (e) {}
+            });
+            // Ulangi potongan: kembali ke titik mulai setelah mencapai titik berhenti / akhir lagu
+            audio.addEventListener('ended', () => {
+                audio.currentTime = start;
+                audio.play().catch(() => {});
+            });
+            if (end) {
+                ringer.guard = setInterval(() => {
+                    if (audio.currentTime >= end) audio.currentTime = start;
+                }, 40);
+            }
+            ringer.audio = audio;
+            audio.play().catch(() => {
+                showAlarmStatus('Browser menahan suara. Ketuk layar sekali agar lagu berbunyi.', true);
+            });
+        } else {
+            const chime = isPrayer ? playPrayerChimeOnce : playChimeOnce;
+            chime(volume);
+            ringer.timer = setInterval(() => chime(volume), isPrayer ? 4500 : 2200);
+        }
+
+        if (navigator.vibrate) {
+            const pattern = [400, 200, 400, 200, 600];
+            navigator.vibrate(pattern);
+            ringer.vib = setInterval(() => navigator.vibrate(pattern), 3000);
+        }
+    }
+
+    // Mematikan suara + getar
+    function stopSound() {
+        if (!ringer) return;
+        if (ringer.audio) {
+            ringer.audio.pause();
+            ringer.audio.currentTime = 0;
+            ringer.audio = null;
+        }
+        clearInterval(ringer.timer);
+        clearInterval(ringer.vib);
+        clearInterval(ringer.guard);
+        ringer.timer = ringer.vib = ringer.guard = null;
+        if (navigator.vibrate) navigator.vibrate(0);
+    }
+
+    // preview = true -> cuplikan singkat dari tombol "Coba" (otomatis berhenti setelah 8 detik);
+    // selain itu alarm sungguhan: berbunyi terus sampai pengguna menekan Matikan / Tunda.
+    function startRinging(preview, kind) {
+        stopRinging();
+        ringer = { preview: !!preview, kind: kind || 'event' };
+        startSound();
+
+        if (preview) {
+            ringer.stopTimer = setTimeout(stopRinging, 8000);
+        } else {
+            // Bila aplikasi di latar belakang, ingatkan lagi lewat notifikasi sistem
+            ringer.notifTimer = setInterval(() => {
+                if (document.hidden && currentAlarm) showSystemNotification(currentAlarm);
+            }, ALARM_RENOTIFY_MS);
+        }
+        updateTestButton();
+    }
+
+    function stopRinging() {
+        if (!ringer) return;
+        stopSound();
+        clearTimeout(ringer.stopTimer);
+        clearInterval(ringer.notifTimer);
+        ringer = null;
+        updateTestButton();
+    }
+
+    // --- Penjadwalan ---
+    function getAlarmAt(ev) {
+        return new Date(ev.startTime).getTime() - (Number(ev.alarmBefore) || 0) * 60000;
+    }
+
+    function getFired() {
+        const fired = readJSON('alarmFired', {});
+        const cutoff = Date.now() - 24 * 3600 * 1000;
+        Object.keys(fired).forEach(k => { if (fired[k] < cutoff) delete fired[k]; });
+        return fired;
+    }
+
+    function markPastAlarmFired(ev) {
+        if (!ev.alarm || getAlarmAt(ev) > Date.now()) return;
+        const fired = getFired();
+        fired[ev.id + '@' + getAlarmAt(ev)] = Date.now();
+        writeJSON('alarmFired', fired);
+    }
+
+    function checkAlarms() {
+        const now = Date.now();
+        const fired = getFired();
+        let changed = false;
+
+        events.forEach(ev => {
+            if (!ev.alarm) return;
+            const at = getAlarmAt(ev);
+            const key = ev.id + '@' + at;
+            if (now >= at && now - at <= ALARM_CATCHUP_MS && !fired[key]) {
+                fired[key] = now;
+                changed = true;
+                triggerAlarm(ev);
+            }
+        });
+        if (checkPrayerAlarms(now, fired)) changed = true;
+        if (changed) writeJSON('alarmFired', fired);
+
+        const snoozes = readJSON('alarmSnoozes', []);
+        if (snoozes.length) {
+            const due = snoozes.filter(sn => sn.at <= now);
+            if (due.length) {
+                writeJSON('alarmSnoozes', snoozes.filter(sn => sn.at > now));
+                due.forEach(sn => {
+                    const ev = events.find(e => e.id === sn.id) ||
+                        (String(sn.id).startsWith('solat-') ? makePrayerEventById(String(sn.id)) : null);
+                    if (ev) triggerAlarm(ev);
+                });
+            }
+        }
+    }
+
+    // ===== Dialog pilihan awal + panel regu =====
+    function applyReligionUI() {
+        const card = document.getElementById('prayer-card');
+        if (card) card.hidden = !isMuslim();
+        if (!isMuslim()) {
+            const modal = document.getElementById('prayer-modal');
+            if (modal) modal.style.display = 'none';
+            if (ringer && ringer.kind === 'prayer') stopRinging();
+        } else {
+            renderPrayerAll();
+            loadPrayerTimes(false);
+        }
+    }
+
+    function renderReguPanel() {
+        const $ = id => document.getElementById(id);
+        const sel = $('regu-select');
+        if (sel) sel.value = userRegu ? String(userRegu) : '';
+        const r = reguDetail(userRegu);
+        const members = $('regu-members');
+        const today = $('regu-today');
+        const summary = $('setup-summary');
+        if (summary) {
+            summary.textContent = userReligion === 'muslim' ? 'Waktu solat: ditampilkan'
+                : userReligion === 'non' ? 'Waktu solat: disembunyikan' : '';
+        }
+        if (!members || !today) return;
+        if (!r) {
+            members.textContent = 'Belum memilih regu.';
+            today.textContent = '';
+            return;
+        }
+        members.textContent = r.members;
+        const now = new Date();
+        const st = reguStatus(now, r.id);
+        const next = nextReguDuty(now, r.id);
+        const fmt = d => d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' });
+        let text = st ? `Hari ini: ${REGU_STATUS[st].label}` : `Jadwal mulai ${fmt(reguStart(r.id))}`;
+        if (next && st !== 'masuk') text += ` • Masuk berikutnya: ${fmt(next)}`;
+        today.textContent = text;
+        today.className = 'regu-today' + (st ? ' ' + st : '');
+    }
+
+    function initSetup() {
+        const $ = id => document.getElementById(id);
+        const modal = $('setup-modal');
+        const sel = $('regu-select');
+        if (!modal || !sel) return;
+
+        $('setup-regu').innerHTML = REGU.map(r =>
+            `<button type="button" class="setup-opt" data-value="${r.id}"><b>${r.name}</b>` +
+            `<small>${escapeHtml(r.members)}</small></button>`).join('');
+        sel.innerHTML = '<option value="" disabled>Pilih regu…</option>' +
+            REGU.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+
+        let draftReligion = userReligion;
+        let draftRegu = userRegu;
+        let forced = false;
+
+        const refresh = () => {
+            modal.querySelectorAll('#setup-religion .setup-opt').forEach(b =>
+                b.classList.toggle('selected', b.dataset.value === draftReligion));
+            modal.querySelectorAll('#setup-regu .setup-opt').forEach(b =>
+                b.classList.toggle('selected', Number(b.dataset.value) === draftRegu));
+            $('setup-save').disabled = !(draftReligion && draftRegu);
+        };
+        const openSetup = isForced => {
+            forced = isForced;
+            draftReligion = userReligion;
+            draftRegu = userRegu;
+            $('setup-close').hidden = isForced;
+            $('setup-title').textContent = isForced ? 'Selamat datang 👋' : 'Ubah pilihan';
+            refresh();
+            modal.style.display = 'flex';
+        };
+        const closeSetup = () => { if (!forced) modal.style.display = 'none'; };
+
+        $('setup-religion').addEventListener('click', e => {
+            const b = e.target.closest('.setup-opt');
+            if (!b) return;
+            draftReligion = b.dataset.value;
+            refresh();
+        });
+        $('setup-regu').addEventListener('click', e => {
+            const b = e.target.closest('.setup-opt');
+            if (!b) return;
+            draftRegu = Number(b.dataset.value);
+            refresh();
+        });
+        $('setup-save').addEventListener('click', () => {
+            if (!(draftReligion && draftRegu)) return;
+            userReligion = draftReligion;
+            userRegu = draftRegu;
+            writeStored('userReligion', userReligion);
+            writeStored('userRegu', String(userRegu));
+            forced = false;
+            modal.style.display = 'none';
+            applyReligionUI();
+            renderReguPanel();
+            renderCalendar();
+        });
+        $('setup-close').addEventListener('click', closeSetup);
+        modal.addEventListener('click', e => { if (e.target === modal) closeSetup(); });
+        document.addEventListener('keydown', e => { if (e.key === 'Escape' && modal.style.display === 'flex') closeSetup(); });
+        $('setup-open-btn').addEventListener('click', () => openSetup(false));
+
+        // Ganti regu cepat dari panel (pilihan tetap tersimpan)
+        sel.addEventListener('change', () => {
+            const id = Number(sel.value);
+            if (!id) return;
+            userRegu = id;
+            writeStored('userRegu', String(userRegu));
+            renderReguPanel();
+            renderCalendar();
+        });
+
+        renderReguPanel();
+        if (!userReligion || !userRegu) openSetup(true);
+        else applyReligionUI();
+        // Status "hari ini" ikut berganti tanpa perlu refresh
+        setInterval(renderReguPanel, 60000);
+    }
+
+    // ===== Catatan harian =====
+    function newNoteId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+
+    function sanitizeNote(n) {
+        if (!n || typeof n !== 'object') return null;
+        const title = String(n.title || '').slice(0, 80);
+        const body = String(n.body || '').slice(0, 2000);
+        if (!title.trim() && !body.trim()) return null;
+        const created = Number(n.createdAt) || Date.now();
+        return {
+            id: String(n.id || newNoteId()),
+            title, body,
+            color: NOTE_COLORS.some(c => c.v === n.color) ? n.color : NOTE_COLORS[0].v,
+            pinned: !!n.pinned,
+            done: !!n.done,
+            createdAt: created,
+            updatedAt: Number(n.updatedAt) || created
+        };
+    }
+
+    function readNotes() {
+        const raw = readJSON(NOTES_KEY, {});
+        const out = {};
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+        Object.keys(raw).forEach(k => {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !Array.isArray(raw[k])) return;
+            const list = raw[k].map(sanitizeNote).filter(Boolean);
+            if (list.length) out[k] = list;
+        });
+        return out;
+    }
+
+    function saveNotes() { writeJSON(NOTES_KEY, notes); }
+
+    function sortedNotes(key) {
+        return (notes[key] || []).slice().sort((a, b) => (Number(b.pinned) - Number(a.pinned)) || (a.createdAt - b.createdAt));
+    }
+
+    function noteCount(key) { return (notes[key] || []).length; }
+
+    function countAllNotes() {
+        return Object.keys(notes).reduce((sum, k) => sum + notes[k].length, 0);
+    }
+
+    // Catatan dari file backup yang belum ada di perangkat ini
+    function collectImportNotes(source) {
+        if (!source) return [];
+        const have = new Set();
+        Object.keys(notes).forEach(k => notes[k].forEach(n => have.add(n.id)));
+        const out = [];
+        Object.keys(source).forEach(k => {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !Array.isArray(source[k])) return;
+            source[k].map(sanitizeNote).filter(Boolean).forEach(n => {
+                if (!have.has(n.id)) { have.add(n.id); out.push({ key: k, note: n }); }
+            });
+        });
+        return out;
+    }
+
+    function noteDateLabel(key, short) {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString('id-ID', short
+            ? { weekday: 'short', day: 'numeric', month: 'short' }
+            : { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    }
+
+    function noteTimeLabel(ms) {
+        return new Date(ms).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function isShown(id) {
+        const el = document.getElementById(id);
+        return !!el && el.style.display === 'flex';
+    }
+
+    // Gambar ulang semua tampilan yang memuat catatan (posisi scroll kalender dipertahankan)
+    function refreshNotesUI() {
+        const top = calendarView.scrollTop;
+        renderCalendar();
+        calendarView.scrollTop = top;
+        renderNotesPanel();
+        if (isShown('notes-book-modal')) renderNotesBook();
+    }
+
+    function removeNote(key, id) {
+        notes[key] = (notes[key] || []).filter(n => n.id !== id);
+        if (!notes[key].length) delete notes[key];
+    }
+
+    function patchNote(key, id, patch) {
+        const n = (notes[key] || []).find(x => x.id === id);
+        if (!n) return;
+        Object.assign(n, patch, { updatedAt: Date.now() });
+        saveNotes();
+        refreshNotesUI();
+    }
+
+    function deleteNote(key, id) {
+        if (!confirm('Hapus catatan ini?')) return false;
+        removeNote(key, id);
+        saveNotes();
+        refreshNotesUI();
+        return true;
+    }
+
+    function createNoteBadge(date) {
+        const key = dateKey(date);
+        const n = noteCount(key);
+        if (!n) return null;
+        const badge = document.createElement('span');
+        badge.className = 'note-badge';
+        badge.textContent = '📝 ' + n;
+        const first = sortedNotes(key).slice(0, 3).map(x => '• ' + (x.title.trim() || x.body.trim()).slice(0, 40));
+        badge.title = `${n} catatan:\n` + first.join('\n') + (n > 3 ? '\n…' : '');
+        return badge;
+    }
+
+    function createNoteCard(note, key, opts) {
+        opts = opts || {};
+        const card = document.createElement('div');
+        card.className = 'note-card' + (note.done ? ' done' : '') + (note.pinned ? ' pinned' : '') + (opts.compact ? ' compact' : '');
+        card.style.setProperty('--note-color', note.color);
+
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'note-check';
+        check.checked = note.done;
+        check.title = 'Tandai selesai';
+        check.setAttribute('aria-label', 'Tandai selesai');
+        check.addEventListener('click', e => e.stopPropagation());
+        check.addEventListener('change', () => patchNote(key, note.id, { done: check.checked }));
+
+        const main = document.createElement('div');
+        main.className = 'note-main';
+        if (note.title.trim()) {
+            const t = document.createElement('div');
+            t.className = 'note-title';
+            t.textContent = note.title;
+            main.appendChild(t);
+        }
+        if (note.body.trim()) {
+            const b = document.createElement('div');
+            b.className = 'note-body';
+            b.textContent = note.body;
+            main.appendChild(b);
+        }
+        const meta = document.createElement('div');
+        meta.className = 'note-meta';
+        meta.textContent = (note.pinned ? '📌 ' : '') + (opts.showDate ? noteDateLabel(key, true) + ' • ' : '') +
+            'Diubah ' + noteTimeLabel(note.updatedAt);
+        main.appendChild(meta);
+
+        card.appendChild(check);
+        card.appendChild(main);
+
+        if (!opts.compact) {
+            const actions = document.createElement('div');
+            actions.className = 'note-actions';
+            const pin = document.createElement('button');
+            pin.type = 'button';
+            pin.className = 'note-icon-btn' + (note.pinned ? ' on' : '');
+            pin.textContent = '📌';
+            pin.title = note.pinned ? 'Lepas sematan' : 'Sematkan di atas';
+            pin.setAttribute('aria-label', pin.title);
+            pin.addEventListener('click', e => { e.stopPropagation(); patchNote(key, note.id, { pinned: !note.pinned }); });
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'note-icon-btn';
+            del.textContent = '🗑️';
+            del.title = 'Hapus catatan';
+            del.setAttribute('aria-label', 'Hapus catatan');
+            del.addEventListener('click', e => { e.stopPropagation(); deleteNote(key, note.id); });
+            actions.appendChild(pin);
+            actions.appendChild(del);
+            card.appendChild(actions);
+        }
+
+        card.title = 'Klik untuk mengedit';
+        card.addEventListener('click', () => openNoteEditor(key, note.id));
+        return card;
+    }
+
+    // Bagian "Catatan" di tampilan Hari
+    function createDayNotesSection(date) {
+        const key = dateKey(date);
+        const items = sortedNotes(key);
+        const sec = document.createElement('section');
+        sec.className = 'notes-section';
+
+        const head = document.createElement('div');
+        head.className = 'notes-section-head';
+        const title = document.createElement('div');
+        title.className = 'notes-section-title';
+        title.textContent = '📝 Catatan';
+        const pill = document.createElement('span');
+        pill.className = 'notes-count-pill';
+        pill.textContent = items.length;
+        title.appendChild(pill);
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'note-add-btn';
+        add.textContent = '＋ Tambah catatan';
+        add.addEventListener('click', () => openNoteEditor(key));
+        head.appendChild(title);
+        head.appendChild(add);
+        sec.appendChild(head);
+
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'notes-empty';
+            empty.textContent = 'Belum ada catatan untuk hari ini. Tulis hal penting, ide, atau pengingat di sini.';
+            sec.appendChild(empty);
+        } else {
+            const list = document.createElement('div');
+            list.className = 'notes-list';
+            items.forEach(n => list.appendChild(createNoteCard(n, key)));
+            sec.appendChild(list);
+        }
+        return sec;
+    }
+
+    // Panel di sidebar: catatan hari ini
+    function renderNotesPanel() {
+        const list = document.getElementById('notes-mini-list');
+        if (!list) return;
+        const key = dateKey(new Date());
+        renderNotesPanel.key = key;
+        const items = sortedNotes(key);
+        document.getElementById('notes-today-count').textContent = items.length;
+        document.getElementById('notes-panel-date').textContent = noteDateLabel(key);
+        list.innerHTML = '';
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'notes-empty';
+            empty.textContent = 'Belum ada catatan hari ini.';
+            list.appendChild(empty);
+            return;
+        }
+        items.slice(0, 3).forEach(n => list.appendChild(createNoteCard(n, key, { compact: true })));
+        if (items.length > 3) {
+            const more = document.createElement('button');
+            more.type = 'button';
+            more.className = 'note-more-btn';
+            more.textContent = `+${items.length - 3} catatan lainnya, lihat semua`;
+            more.addEventListener('click', () => goToNoteDay(key));
+            list.appendChild(more);
+        }
+    }
+
+    function goToNoteDay(key) {
+        const [y, m, d] = key.split('-').map(Number);
+        currentDate = new Date(y, m - 1, d);
+        closeNotesBook();
+        switchView('day');
+    }
+
+    // Buku catatan: semua catatan, dikelompokkan per tanggal
+    function renderNotesBook() {
+        const list = document.getElementById('notes-book-list');
+        const summary = document.getElementById('notes-summary');
+        if (!list) return;
+        const q = notesFilter.q.trim().toLowerCase();
+        const thisMonth = dateKey(new Date()).slice(0, 7);
+        const todayKey = dateKey(new Date());
+        list.innerHTML = '';
+        document.querySelectorAll('#notes-chips .note-chip').forEach(c =>
+            c.classList.toggle('active', c.dataset.mode === notesFilter.mode));
+
+        let total = 0;
+        let days = 0;
+        Object.keys(notes).sort().reverse().forEach(key => {
+            const items = sortedNotes(key).filter(n => {
+                if (notesFilter.mode === 'pinned' && !n.pinned) return false;
+                if (notesFilter.mode === 'open' && n.done) return false;
+                if (notesFilter.mode === 'month' && !key.startsWith(thisMonth)) return false;
+                if (q && !(n.title + ' ' + n.body).toLowerCase().includes(q)) return false;
+                return true;
+            });
+            if (!items.length) return;
+            total += items.length;
+            days++;
+
+            const group = document.createElement('div');
+            group.className = 'notes-group';
+            const head = document.createElement('button');
+            head.type = 'button';
+            head.className = 'notes-group-head';
+            head.title = 'Buka tampilan hari ini';
+            const label = document.createElement('span');
+            label.textContent = noteDateLabel(key) + (key === todayKey ? ' • Hari ini' : '');
+            const count = document.createElement('span');
+            count.className = 'notes-count-pill';
+            count.textContent = items.length;
+            head.appendChild(label);
+            head.appendChild(count);
+            head.addEventListener('click', () => goToNoteDay(key));
+            group.appendChild(head);
+            items.forEach(n => group.appendChild(createNoteCard(n, key)));
+            list.appendChild(group);
+        });
+
+        if (!total) {
+            const empty = document.createElement('div');
+            empty.className = 'notes-empty big';
+            empty.textContent = countAllNotes()
+                ? 'Tidak ada catatan yang cocok dengan pencarian atau filter ini.'
+                : 'Belum ada catatan. Tekan "＋ Catatan" untuk mulai menulis.';
+            list.appendChild(empty);
+        }
+        summary.textContent = total ? `${total} catatan di ${days} hari` : '';
+    }
+
+    function openNotesBook() {
+        notesFilter = { q: '', mode: 'all' };
+        document.getElementById('notes-search').value = '';
+        renderNotesBook();
+        document.getElementById('notes-book-modal').style.display = 'flex';
+    }
+
+    function closeNotesBook() {
+        const m = document.getElementById('notes-book-modal');
+        if (m) m.style.display = 'none';
+    }
+
+    // Editor catatan (tambah / edit)
+    function openNoteEditor(key, id) {
+        const $ = x => document.getElementById(x);
+        const existing = id ? (notes[key] || []).find(n => n.id === id) : null;
+        editingNote = existing ? { key, id } : null;
+        $('note-form-title').textContent = existing ? 'Edit catatan' : 'Tambah catatan';
+        $('note-date').value = key || dateKey(new Date());
+        $('note-title').value = existing ? existing.title : '';
+        $('note-body').value = existing ? existing.body : '';
+        $('note-pinned').checked = existing ? existing.pinned : false;
+        const color = existing ? existing.color : NOTE_COLORS[0].v;
+        document.querySelectorAll('input[name="note-color"]').forEach(r => { r.checked = r.value === color; });
+        $('note-counter').textContent = `${$('note-body').value.length} / 2000`;
+        $('note-error').textContent = '';
+        $('note-delete').hidden = !existing;
+        $('note-modal').style.display = 'flex';
+        setTimeout(() => { try { (existing ? $('note-body') : $('note-title')).focus(); } catch (e) {} }, 50);
+    }
+
+    function closeNoteEditor() {
+        const m = document.getElementById('note-modal');
+        if (m) m.style.display = 'none';
+        editingNote = null;
+    }
+
+    function saveNoteFromForm() {
+        const $ = x => document.getElementById(x);
+        const title = $('note-title').value.trim();
+        const body = $('note-body').value.replace(/\s+$/, '');
+        if (!title && !body.trim()) {
+            $('note-error').textContent = 'Isi judul atau catatannya dulu.';
+            return;
+        }
+        const key = $('note-date').value || dateKey(new Date());
+        const picked = document.querySelector('input[name="note-color"]:checked');
+        const now = Date.now();
+        let base = { id: newNoteId(), createdAt: now, done: false };
+        if (editingNote) {
+            const old = (notes[editingNote.key] || []).find(n => n.id === editingNote.id);
+            if (old) {
+                base = { id: old.id, createdAt: old.createdAt, done: old.done };
+                removeNote(editingNote.key, old.id);
+            }
+        }
+        const note = Object.assign(base, {
+            title, body,
+            color: picked ? picked.value : NOTE_COLORS[0].v,
+            pinned: $('note-pinned').checked,
+            updatedAt: now
+        });
+        (notes[key] = notes[key] || []).push(note);
+        saveNotes();
+        closeNoteEditor();
+        refreshNotesUI();
+    }
+
+    function initNotes() {
+        const $ = x => document.getElementById(x);
+        if (!$('note-modal') || !$('notes-book-modal')) return;
+
+        $('note-swatches').innerHTML = NOTE_COLORS.map((c, i) =>
+            `<label class="note-swatch" title="${c.n}"><input type="radio" name="note-color" value="${c.v}"` +
+            `${i === 0 ? ' checked' : ''}><span style="background:${c.v}"></span></label>`).join('');
+
+        $('notes-panel-add').addEventListener('click', () => openNoteEditor(dateKey(new Date())));
+        $('notes-open-book').addEventListener('click', openNotesBook);
+        $('notes-book-add').addEventListener('click', () => openNoteEditor(dateKey(new Date())));
+        $('notes-book-close').addEventListener('click', closeNotesBook);
+        $('notes-book-modal').addEventListener('click', e => { if (e.target === $('notes-book-modal')) closeNotesBook(); });
+        $('notes-search').addEventListener('input', e => { notesFilter.q = e.target.value; renderNotesBook(); });
+        $('notes-chips').addEventListener('click', e => {
+            const chip = e.target.closest('.note-chip');
+            if (!chip) return;
+            notesFilter.mode = chip.dataset.mode;
+            renderNotesBook();
+        });
+
+        $('note-close').addEventListener('click', closeNoteEditor);
+        $('note-cancel').addEventListener('click', closeNoteEditor);
+        $('note-modal').addEventListener('click', e => { if (e.target === $('note-modal')) closeNoteEditor(); });
+        $('note-form').addEventListener('submit', e => { e.preventDefault(); saveNoteFromForm(); });
+        $('note-body').addEventListener('input', () => {
+            $('note-counter').textContent = `${$('note-body').value.length} / 2000`;
+            $('note-error').textContent = '';
+        });
+        $('note-title').addEventListener('input', () => { $('note-error').textContent = ''; });
+        $('note-body').addEventListener('keydown', e => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('note-form').requestSubmit(); }
+        });
+        $('note-delete').addEventListener('click', () => {
+            if (editingNote && deleteNote(editingNote.key, editingNote.id)) closeNoteEditor();
+        });
+        document.addEventListener('keydown', e => {
+            if (e.key !== 'Escape') return;
+            if (isShown('note-modal')) closeNoteEditor();
+            else if (isShown('notes-book-modal')) closeNotesBook();
+        });
+
+        renderNotesPanel();
+        // Panel "hari ini" ikut berganti saat lewat tengah malam
+        setInterval(() => {
+            if (renderNotesPanel.key !== dateKey(new Date())) renderNotesPanel();
+        }, 60000);
+    }
+
+    // ===== Waktu solat 5 waktu =====
+    // Semua jam dari API adalah WIB. Waktu mutlak dihitung dengan offset +07:00,
+    // jadi alarm tetap tepat walaupun zona waktu perangkat berbeda.
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function wibKey(ms) { return new Date(ms + 7 * 3600000).toISOString().slice(0, 10); }
+    function shiftKey(key, days) {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+    }
+    function prayerEpoch(key, hhmm) { return new Date(key + 'T' + hhmm + ':00+07:00').getTime(); }
+    function isFridayKey(key) {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 5;
+    }
+    function addMinutes(hhmm, n) {
+        const [h, m] = hhmm.split(':').map(Number);
+        const t = (h * 60 + m + n + 1440) % 1440;
+        return pad2(Math.floor(t / 60)) + ':' + pad2(t % 60);
+    }
+    function validTime(s) { return /^\d{2}:\d{2}$/.test(String(s)); }
+    function fmtHM(t) { return String(t).replace(':', '.'); }
+    function fmtCountdown(ms) {
+        const s = Math.max(0, Math.floor(ms / 1000));
+        return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60)) + ':' + pad2(s % 60);
+    }
+    function prayerDateLabel(key, withYear) {
+        return new Date(key + 'T12:00:00+07:00').toLocaleDateString('id-ID', {
+            weekday: 'long', day: 'numeric', month: 'long', year: withYear ? 'numeric' : undefined, timeZone: 'Asia/Jakarta'
+        });
+    }
+
+    function readPrayerSettings() {
+        const saved = readJSON('prayerSettings', {});
+        const s = Object.assign({}, PRAYER_DEFAULTS, saved);
+        s.on = Object.assign({}, PRAYER_DEFAULTS.on, saved.on || {});
+        s.before = [0, 5, 10, 15, 30].includes(Number(s.before)) ? Number(s.before) : 0;
+        const v = Number(s.volume);
+        s.volume = v >= 0 && v <= 100 ? v : 80;
+        return s;
+    }
+
+    function savePrayerSettings() { writeJSON('prayerSettings', prayerSettings); }
+
+    function normalizeDay(raw) {
+        const day = {};
+        for (const p of PRAYERS) {
+            if (!validTime(raw[p.key])) return null;
+            day[p.key] = raw[p.key];
+        }
+        ['imsak', 'terbit', 'dhuha'].forEach(k => { day[k] = validTime(raw[k]) ? raw[k] : ''; });
+        day.src = raw.src;
+        return day;
+    }
+
+    function fetchJson(url) {
+        const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null;
+        return fetch(url, ctrl ? { signal: ctrl.signal } : undefined)
+            .then(res => {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.json();
+            })
+            .finally(() => { if (timer) clearTimeout(timer); });
+    }
+
+    // Sumber utama: jadwal resmi Kemenag RI lewat MyQuran (Kota Jakarta)
+    async function fetchMyQuran(y, m) {
+        const json = await fetchJson(`https://api.myquran.com/v2/sholat/jadwal/${PRAYER_CITY_ID}/${y}/${pad2(m)}`);
+        const list = json && json.data && json.data.jadwal;
+        if (!Array.isArray(list) || !list.length) throw new Error('Data kosong');
+        const out = {};
+        list.forEach(r => {
+            const day = normalizeDay({
+                imsak: r.imsak, subuh: r.subuh, terbit: r.terbit, dhuha: r.dhuha,
+                dzuhur: r.dzuhur, ashar: r.ashar, maghrib: r.maghrib, isya: r.isya, src: 'myquran'
+            });
+            if (day && /^\d{4}-\d{2}-\d{2}$/.test(r.date)) out[r.date] = day;
+        });
+        if (!Object.keys(out).length) throw new Error('Data tidak valid');
+        return out;
+    }
+
+    // Cadangan: Aladhan, metode 20 (Kemenag RI), koordinat Tanjung Priok
+    async function fetchAladhan(y, m) {
+        const json = await fetchJson(`https://api.aladhan.com/v1/calendar/${y}/${m}?latitude=${PRAYER_LAT}` +
+            `&longitude=${PRAYER_LNG}&method=20&timezonestring=Asia/Jakarta`);
+        if (!json || !Array.isArray(json.data) || !json.data.length) throw new Error('Data kosong');
+        const hm = s => String(s).slice(0, 5);
+        const out = {};
+        json.data.forEach(d => {
+            const [dd, mm, yy] = d.date.gregorian.date.split('-');
+            const t = d.timings;
+            const terbit = hm(t.Sunrise);
+            const day = normalizeDay({
+                imsak: hm(t.Imsak), subuh: hm(t.Fajr), terbit,
+                dhuha: validTime(terbit) ? addMinutes(terbit, 27) : '',
+                dzuhur: hm(t.Dhuhr), ashar: hm(t.Asr), maghrib: hm(t.Maghrib), isya: hm(t.Isha), src: 'aladhan'
+            });
+            if (day) out[`${yy}-${mm}-${dd}`] = day;
+        });
+        if (!Object.keys(out).length) throw new Error('Data tidak valid');
+        return out;
+    }
+
+    async function ensurePrayerMonth(y, m, force) {
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        const lastKey = `${y}-${pad2(m)}-${pad2(lastDay)}`;
+        const have = prayerTimes[lastKey];
+        const sixHours = 6 * 3600000;
+        const retryMain = have && have.src !== 'myquran' &&
+            Date.now() - (Number(localStorage.getItem('prayerRetryAt')) || 0) > sixHours;
+        if (have && !force && !retryMain) return true;
+
+        for (const fetcher of [fetchMyQuran, fetchAladhan]) {
+            try {
+                const data = await fetcher(y, m);
+                Object.assign(prayerTimes, data);
+                if (fetcher === fetchAladhan) {
+                    try { localStorage.setItem('prayerRetryAt', String(Date.now())); } catch (e) {}
+                }
+                return true;
+            } catch (e) {
+                console.warn('Jadwal solat gagal:', fetcher.name, e);
+            }
+        }
+        return !!have;
+    }
+
+    async function loadPrayerTimes(force) {
+        if (!isMuslim() || prayerLoading) return false;
+        prayerLoading = true;
+        prayerState = 'loading';
+        renderPrayerAll();
+
+        const now = Date.now();
+        const [y, m] = wibKey(now).split('-').map(Number);
+        const ny = m === 12 ? y + 1 : y;
+        const nm = m === 12 ? 1 : m + 1;
+        const ok = await ensurePrayerMonth(y, m, force);
+        await ensurePrayerMonth(ny, nm, force);
+
+        const oldest = shiftKey(wibKey(now), -7);
+        Object.keys(prayerTimes).forEach(k => { if (k < oldest) delete prayerTimes[k]; });
+        try { localStorage.setItem(PRAYER_CACHE_KEY, JSON.stringify(prayerTimes)); } catch (e) {}
+
+        prayerState = ok && prayerTimes[wibKey(now)] ? 'ok' : 'fail';
+        prayerLoading = false;
+        renderPrayerAll();
+        return prayerState === 'ok';
+    }
+
+    function nextPrayer(now) {
+        const today = wibKey(now);
+        for (let off = 0; off <= 1; off++) {
+            const dateKey = shiftKey(today, off);
+            const day = prayerTimes[dateKey];
+            if (!day) continue;
+            for (const p of PRAYERS) {
+                const at = prayerEpoch(dateKey, day[p.key]);
+                if (at > now) return { key: p.key, name: p.name, dateKey, time: day[p.key], at };
+            }
+        }
+        return null;
+    }
+
+    function makePrayerEvent(dateKey, prayerKey) {
+        const day = prayerTimes[dateKey];
+        const p = PRAYERS.find(x => x.key === prayerKey);
+        if (!day || !p) return null;
+        const at = new Date(prayerEpoch(dateKey, day[prayerKey]));
+        const jumat = prayerKey === 'dzuhur' && isFridayKey(dateKey);
+        return {
+            id: `solat-${dateKey}-${prayerKey}`,
+            kind: 'prayer',
+            title: `🕌 Waktu ${p.name}${jumat ? ' (Jumat)' : ''}`,
+            startTime: at.toISOString(),
+            endTime: at.toISOString(),
+            description: `Saatnya menunaikan solat ${p.name}.`,
+            subtitle: `${prayerDateLabel(dateKey)} • ${fmtHM(day[prayerKey])} WIB • ${PRAYER_PLACE}`,
+            color: '#0f9d7a',
+            alarm: true,
+            alarmBefore: 0
+        };
+    }
+
+    function makePrayerEventById(id) {
+        // id: solat-YYYY-MM-DD-nama
+        if (!isMuslim()) return null;
+        return makePrayerEvent(id.slice(6, 16), id.slice(17));
+    }
+
+    function checkPrayerAlarms(now, fired) {
+        if (!isMuslim() || !prayerSettings.master) return false;
+        const dateKey = wibKey(now);
+        const day = prayerTimes[dateKey];
+        if (!day) return false;
+        let changed = false;
+        PRAYERS.forEach(p => {
+            if (!prayerSettings.on[p.key]) return;
+            const at = prayerEpoch(dateKey, day[p.key]) - prayerSettings.before * 60000;
+            const fk = `solat-${dateKey}-${p.key}@${at}`;
+            if (now >= at && now - at <= ALARM_CATCHUP_MS && !fired[fk]) {
+                fired[fk] = now;
+                changed = true;
+                const ev = makePrayerEvent(dateKey, p.key);
+                if (ev) triggerAlarm(ev);
+            }
+        });
+        return changed;
+    }
+
+    // Saat pengaturan diubah, alarm yang waktunya sudah lewat tidak boleh langsung berbunyi
+    function markPrayerPastFired() {
+        const now = Date.now();
+        const dateKey = wibKey(now);
+        const day = prayerTimes[dateKey];
+        if (!day) return;
+        const fired = getFired();
+        PRAYERS.forEach(p => {
+            const at = prayerEpoch(dateKey, day[p.key]) - prayerSettings.before * 60000;
+            if (at <= now) fired[`solat-${dateKey}-${p.key}@${at}`] = now;
+        });
+        writeJSON('alarmFired', fired);
+    }
+
+    // Nada bawaan solat: arpeggio lembut yang lebih pelan dari alarm acara
+    function playPrayerChimeOnce(volume) {
+        const ctx = getAudioCtx();
+        if (!ctx) return;
+        [523.25, 659.25, 783.99, 659.25, 523.25, 392].forEach((freq, i) => {
+            const t = ctx.currentTime + i * 0.55;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.0001, t);
+            gain.gain.exponentialRampToValueAtTime(Math.max(volume, 0.01) * 0.5, t + 0.08);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 1.2);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(t);
+            osc.stop(t + 1.25);
+        });
+    }
+
+    function showPrayerStatus(message, isError) {
+        const el = document.getElementById('prayer-status');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('error', !!isError);
+        clearTimeout(showPrayerStatus._t);
+        showPrayerStatus._t = setTimeout(() => { el.textContent = ''; }, 7000);
+    }
+
+    // --- Tampilan ---
+    function prayerSig(np) { return (np ? np.dateKey + np.key : 'none') + prayerState + (prayerViewDate || ''); }
+
+    function renderPrayerCountdown(np, now) {
+        const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+        set('prayer-card-count', np ? fmtCountdown(np.at - now) : '');
+        set('prayer-hero-count', np ? '⏳ ' + fmtCountdown(np.at - now) : '');
+    }
+
+    function renderPrayerAll() {
+        const now = Date.now();
+        const np = nextPrayer(now);
+        prayerLastSig = prayerSig(np);
+        const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+
+        let label;
+        if (np) {
+            const besok = np.dateKey !== wibKey(now);
+            const jumat = np.key === 'dzuhur' && isFridayKey(np.dateKey);
+            label = `Menuju ${np.name}${jumat ? ' (Jumat)' : ''}${besok ? ' besok' : ''}`;
+        } else if (prayerState === 'loading') {
+            label = 'Memuat jadwal…';
+        } else {
+            label = 'Jadwal belum tersedia';
+        }
+        set('prayer-card-label', label);
+        set('prayer-hero-label', label);
+        set('prayer-card-time', np ? fmtHM(np.time) : '--.--');
+        set('prayer-hero-time', np ? fmtHM(np.time) : '--.--');
+        renderPrayerCountdown(np, now);
+        renderPrayerModal(np, now);
+    }
+
+    function renderPrayerModal(np, now) {
+        const list = document.getElementById('prayer-list');
+        if (!list) return;
+        const todayKey = wibKey(now);
+        const viewKey = prayerViewDate || todayKey;
+        const day = prayerTimes[viewKey];
+
+        const dateEl = document.getElementById('prayer-date');
+        if (dateEl) dateEl.textContent = prayerDateLabel(viewKey, true) + (viewKey === todayKey ? ' • Hari ini' : '');
+        const prev = document.getElementById('prayer-nav-prev');
+        const next = document.getElementById('prayer-nav-next');
+        if (prev) prev.disabled = !prayerTimes[shiftKey(viewKey, -1)];
+        if (next) next.disabled = !prayerTimes[shiftKey(viewKey, 1)];
+        const todayBtn = document.getElementById('prayer-nav-today');
+        if (todayBtn) todayBtn.hidden = viewKey === todayKey;
+
+        list.classList.toggle('muted', !prayerSettings.master);
+
+        if (!day) {
+            list.innerHTML = '<li class="prayer-empty">' + (prayerState === 'loading'
+                ? 'Memuat jadwal solat…'
+                : 'Jadwal belum bisa dimuat. Periksa koneksi internet lalu tekan "Perbarui jadwal".') + '</li>';
+        } else {
+            list.innerHTML = PRAYERS.map(p => {
+                const at = prayerEpoch(viewKey, day[p.key]);
+                const passed = viewKey < todayKey || (viewKey === todayKey && at <= now);
+                const isNext = !!np && np.dateKey === viewKey && np.key === p.key;
+                const jumat = p.key === 'dzuhur' && isFridayKey(viewKey);
+                return `<li class="prayer-row${isNext ? ' next' : ''}${passed ? ' passed' : ''}">` +
+                    `<span class="prayer-icon">${p.icon}</span>` +
+                    `<span class="prayer-name">${p.name}${jumat ? '<small>Jumat</small>' : ''}</span>` +
+                    `<span class="prayer-time">${fmtHM(day[p.key])}</span>` +
+                    `<input type="checkbox" class="switch" data-prayer="${p.key}" aria-label="Alarm ${p.name}"` +
+                    `${prayerSettings.on[p.key] ? ' checked' : ''}></li>`;
+            }).join('');
+        }
+
+        const info = document.getElementById('prayer-info');
+        if (info) {
+            info.innerHTML = day
+                ? [['Imsak', day.imsak], ['Terbit', day.terbit], ['Dhuha', day.dhuha]]
+                    .filter(x => x[1]).map(x => `<span class="prayer-chip"><b>${x[0]}</b>${fmtHM(x[1])}</span>`).join('')
+                : '';
+        }
+
+        const src = document.getElementById('prayer-source');
+        if (src) {
+            if (!day) src.textContent = '';
+            else if (day.src === 'myquran') src.textContent = 'Sumber: jadwal resmi Kemenag RI (Kota Jakarta) lewat MyQuran. Semua waktu dalam WIB.';
+            else src.textContent = 'Sumber cadangan: Aladhan (metode Kemenag RI, koordinat ' + PRAYER_PLACE +
+                '). Hasil hitungan, bisa selisih 1–4 menit dari jadwal resmi. Semua waktu dalam WIB.';
+        }
+    }
+
+    function syncPrayerSettingsUI() {
+        const $ = id => document.getElementById(id);
+        if ($('prayer-master')) $('prayer-master').checked = !!prayerSettings.master;
+        if ($('prayer-sound-on')) $('prayer-sound-on').checked = !!prayerSettings.sound;
+        if ($('prayer-notif-on')) $('prayer-notif-on').checked = !!prayerSettings.notif;
+        if ($('prayer-before')) $('prayer-before').value = String(prayerSettings.before);
+        if ($('prayer-volume')) $('prayer-volume').value = String(prayerSettings.volume);
+    }
+
+    function prayerTick() {
+        const now = Date.now();
+        const np = nextPrayer(now);
+        if (prayerSig(np) !== prayerLastSig) renderPrayerAll();
+        else renderPrayerCountdown(np, now);
+    }
+
+    function initPrayer() {
+        const $ = id => document.getElementById(id);
+        const modal = $('prayer-modal');
+        if (!modal || !$('prayer-card')) return;
+
+        const askNotif = () => {
+            if ('Notification' in window && Notification.permission === 'default') {
+                Notification.requestPermission().then(updateNotifButton).catch(() => {});
+            }
+        };
+        const close = () => { modal.style.display = 'none'; };
+
+        $('prayer-detail-btn').addEventListener('click', () => {
+            prayerViewDate = null;
+            renderPrayerAll();
+            modal.style.display = 'flex';
+        });
+        $('prayer-close').addEventListener('click', close);
+        modal.addEventListener('click', e => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && modal.style.display === 'flex' && rtModal.style.display !== 'flex') close();
+        });
+
+        // Pengaturan
+        syncPrayerSettingsUI();
+        $('prayer-master').addEventListener('change', e => {
+            prayerSettings.master = e.target.checked;
+            savePrayerSettings();
+            markPrayerPastFired();
+            if (prayerSettings.master) askNotif();
+            renderPrayerAll();
+        });
+        $('prayer-sound-on').addEventListener('change', e => {
+            prayerSettings.sound = e.target.checked;
+            savePrayerSettings();
+        });
+        $('prayer-notif-on').addEventListener('change', e => {
+            prayerSettings.notif = e.target.checked;
+            savePrayerSettings();
+            if (prayerSettings.notif) askNotif();
+        });
+        $('prayer-before').addEventListener('change', e => {
+            prayerSettings.before = Number(e.target.value) || 0;
+            savePrayerSettings();
+            markPrayerPastFired();
+        });
+        $('prayer-volume').addEventListener('input', e => {
+            prayerSettings.volume = Number(e.target.value);
+            savePrayerSettings();
+            if (ringer && ringer.audio && ringer.kind === 'prayer') ringer.audio.volume = prayerSettings.volume / 100;
+        });
+
+        // Saklar per waktu solat
+        $('prayer-list').addEventListener('change', e => {
+            const box = e.target.closest('input[data-prayer]');
+            if (!box) return;
+            prayerSettings.on[box.dataset.prayer] = box.checked;
+            savePrayerSettings();
+            markPrayerPastFired();
+            if (box.checked) askNotif();
+        });
+
+        // Pindah hari
+        $('prayer-nav-prev').addEventListener('click', () => {
+            prayerViewDate = shiftKey(prayerViewDate || wibKey(Date.now()), -1);
+            renderPrayerAll();
+        });
+        $('prayer-nav-next').addEventListener('click', () => {
+            prayerViewDate = shiftKey(prayerViewDate || wibKey(Date.now()), 1);
+            renderPrayerAll();
+        });
+        $('prayer-nav-today').addEventListener('click', () => {
+            prayerViewDate = null;
+            renderPrayerAll();
+        });
+
+        // Nada solat (terpisah dari nada alarm acara)
+        const fileInput = $('prayer-file');
+        $('prayer-pick-btn').addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+            handleSoundFile(fileInput.files[0], 'prayerSound');
+            fileInput.value = '';
+        });
+        $('prayer-edit-btn').addEventListener('click', () => editSavedRingtone('prayerSound'));
+        $('prayer-test-btn').addEventListener('click', () => {
+            if (ringer && ringer.preview && ringer.kind === 'prayer') stopRinging();
+            else if (!ringer) startRinging(true, 'prayer');
+        });
+        $('prayer-reset-btn').addEventListener('click', async () => {
+            try { await idbRequest('readwrite', store => store.delete('prayerSound')); } catch (e) {}
+            await loadCustomSound();
+            showPrayerStatus('Kembali memakai nada bawaan solat.');
+        });
+
+        $('prayer-refresh').addEventListener('click', async () => {
+            showPrayerStatus('Memperbarui jadwal…');
+            const ok = await loadPrayerTimes(true);
+            showPrayerStatus(ok ? '✔ Jadwal solat diperbarui.' : 'Gagal memuat jadwal. Periksa koneksi internet.', !ok);
+        });
+
+        renderPrayerAll();
+        loadPrayerTimes(false);
+        setInterval(prayerTick, 1000);
+        setInterval(() => loadPrayerTimes(false), 6 * 3600000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) loadPrayerTimes(false); });
+    }
+
+    function triggerAlarm(ev) {
+        if ((currentAlarm && currentAlarm.id === ev.id) || alarmQueue.some(a => a.id === ev.id)) return;
+        alarmQueue.push(ev);
+        if (document.hidden) showSystemNotification(ev);
+        if (!currentAlarm) showNextAlarm();
+        else updateAlarmQueueLabel();
+    }
+
+    function updateAlarmQueueLabel() {
+        if (!alarmQueueEl) return;
+        alarmQueueEl.textContent = alarmQueue.length ? `+${alarmQueue.length} alarm lain menunggu` : '';
+    }
+
+    function describeStart(ev) {
+        const diff = Math.round((new Date(ev.startTime) - Date.now()) / 60000);
+        if (ev.kind === 'prayer') return diff > 0 ? `${diff} menit lagi menuju waktu solat` : 'Waktu solat telah tiba';
+        if (diff > 0) return `Dimulai ${diff} menit lagi`;
+        if (diff < 0) return `Dimulai ${-diff} menit lalu`;
+        return 'Acara dimulai sekarang';
+    }
+
+    function showNextAlarm() {
+        currentAlarm = alarmQueue.shift() || null;
+
+        if (!currentAlarm) {
+            alarmOverlay.hidden = true;
+            stopRinging();
+            document.title = baseTitle;
+            return;
+        }
+
+        const ev = currentAlarm;
+        const start = new Date(ev.startTime);
+        const end = new Date(ev.endTime);
+
+        alarmCard.style.setProperty('--alarm-color', ev.color || '#4e73df');
+        alarmWhenEl.textContent = describeStart(ev);
+        alarmTitleEl.textContent = ev.title;
+        alarmTimeEl.textContent = ev.kind === 'prayer'
+            ? ev.subtitle
+            : start.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' }) +
+                ' • ' + formatTime(start) + ' - ' + formatTime(end);
+        alarmDescEl.textContent = ev.description || '';
+        alarmDescEl.hidden = !ev.description;
+        updateAlarmQueueLabel();
+
+        alarmOverlay.hidden = false;
+        document.title = '🔔 ' + ev.title;
+        startRinging(false, ev.kind);
+    }
+
+    function dismissAlarm() {
+        stopRinging();
+        showNextAlarm();
+    }
+
+    function snoozeAlarm() {
+        if (currentAlarm) {
+            const snoozes = readJSON('alarmSnoozes', []);
+            snoozes.push({ id: currentAlarm.id, at: Date.now() + ALARM_SNOOZE_MIN * 60000 });
+            writeJSON('alarmSnoozes', snoozes);
+        }
+        dismissAlarm();
+    }
+
+    // Notifikasi sistem (tampil saat tab/aplikasi sedang di latar belakang)
+    async function showSystemNotification(ev) {
+        if (!('Notification' in window) || Notification.permission !== 'granted') return;
+        if (ev.kind === 'prayer' && !prayerSettings.notif) return;
+        const start = new Date(ev.startTime);
+        const options = {
+            body: ev.kind === 'prayer'
+                ? describeStart(ev) + ' • ' + ev.subtitle
+                : describeStart(ev) + ' • ' + formatTime(start),
+            tag: 'alarm-' + ev.id,
+            requireInteraction: true,
+            vibrate: [300, 150, 300, 150, 600]
+        };
+        try {
+            const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+            if (reg) {
+                await reg.showNotification('🔔 ' + ev.title, options);
+                return;
+            }
+        } catch (e) { /* lanjut ke cara biasa */ }
+        try { new Notification('🔔 ' + ev.title, options); } catch (e) {}
+    }
+
+    function updateNotifButton() {
+        if (!notifBtn) return;
+        if (!('Notification' in window)) {
+            notifBtn.hidden = true;
+            return;
+        }
+        const perm = Notification.permission;
+        notifBtn.disabled = perm !== 'default';
+        notifBtn.textContent = perm === 'granted' ? '✔ Notifikasi aktif'
+            : perm === 'denied' ? '🚫 Notifikasi diblokir'
+            : '🔔 Aktifkan notifikasi';
+        if (perm === 'denied') {
+            showAlarmStatus('Izinkan notifikasi lewat pengaturan situs di browser Anda.', true);
+        }
+    }
+
+    // ===== Editor nada dering: pilih potongan lagu -> tes -> jadikan nada dering =====
+    let rt = null;
+    const RT_MIN_GAP = 1;        // potongan minimal 1 detik
+    const RT_DEFAULT_LEN = 30;   // potongan awal 30 detik pertama
+
+    function isAudioFile(file) {
+        return (file.type && file.type.startsWith('audio/')) ||
+            /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus|webm|amr)$/i.test(file.name || '');
+    }
+
+    function handleSoundFile(file, target) {
+        if (!file) return;
+        if (!isAudioFile(file)) {
+            showAlarmStatus('File harus berupa audio (mp3, wav, ogg, m4a).', true);
+            return;
+        }
+        if (file.size > ALARM_MAX_FILE_MB * 1024 * 1024) {
+            showAlarmStatus(`Ukuran file maksimal ${ALARM_MAX_FILE_MB} MB.`, true);
+            return;
+        }
+        openRingtoneEditor(file, file.name, file.type, 0, null, target);
+    }
+
+    async function editSavedRingtone(target) {
+        const key = target || 'alarmSound';
+        let rec = null;
+        try { rec = await idbRequest('readonly', store => store.get(key)); } catch (e) {}
+        if (!rec || !rec.blob) {
+            const msg = 'Belum ada lagu tersimpan. Tekan "Pilih lagu" dulu.';
+            if (key === 'prayerSound') showPrayerStatus(msg, true); else showAlarmStatus(msg, true);
+            return;
+        }
+        openRingtoneEditor(rec.blob, rec.name, rec.type, rec.start || 0, rec.end || Infinity, key);
+    }
+
+    function metadataDuration(url) {
+        return new Promise(resolve => {
+            const a = new Audio();
+            const timer = setTimeout(() => resolve(0), 5000);
+            a.preload = 'metadata';
+            a.onloadedmetadata = () => { clearTimeout(timer); resolve(isFinite(a.duration) ? a.duration : 0); };
+            a.onerror = () => { clearTimeout(timer); resolve(0); };
+            a.src = url;
+        });
+    }
+
+    function computePeaks(buffer, bins) {
+        const ch = [];
+        for (let c = 0; c < Math.min(2, buffer.numberOfChannels); c++) ch.push(buffer.getChannelData(c));
+        const len = ch[0].length;
+        const per = Math.max(1, Math.floor(len / bins));
+        const stride = Math.max(1, Math.floor(per / 40));
+        const peaks = new Array(bins).fill(0);
+        let max = 0;
+        for (let i = 0; i < bins; i++) {
+            let m = 0;
+            const from = i * per;
+            const to = Math.min(len, from + per);
+            for (let j = from; j < to; j += stride) {
+                for (let c = 0; c < ch.length; c++) {
+                    const v = Math.abs(ch[c][j]);
+                    if (v > m) m = v;
+                }
+            }
+            peaks[i] = m;
+            if (m > max) max = m;
+        }
+        return max > 0 ? peaks.map(p => p / max) : peaks;
+    }
+
+    // Membaca durasi + gelombang. Didecode pada 8 kHz agar hemat memori di HP.
+    async function analyseAudio(blob, url) {
+        let duration = 0;
+        let peaks = null;
+        try {
+            const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            const ctx = new OAC(1, 1, 8000);
+            const data = await blob.arrayBuffer();
+            const decoded = await new Promise((resolve, reject) => {
+                const p = ctx.decodeAudioData(data, resolve, reject);
+                if (p && p.then) p.then(resolve, reject);
+            });
+            duration = decoded.duration;
+            peaks = computePeaks(decoded, 240);
+        } catch (e) { /* lanjut tanpa gelombang */ }
+        if (!duration) duration = await metadataDuration(url);
+        return { duration, peaks };
+    }
+
+    function setRtEnabled(on) {
+        [rtStart, rtEnd, rtSetStart, rtSetEnd, rtTestBtn, rtSaveBtn].forEach(el => { el.disabled = !on; });
+    }
+
+    async function openRingtoneEditor(blob, name, type, start, end, target) {
+        closeRingtoneEditor();
+        const url = URL.createObjectURL(blob);
+        const token = {};
+        rt = { token, target: target || 'alarmSound', blob, name, type: type || blob.type || 'audio/mpeg', url, duration: 0, start: 0, end: 0, peaks: null, audio: null, lastTime: 0 };
+
+        rtFile.textContent = name;
+        rtWaveMsg.textContent = 'Memuat lagu…';
+        rtNow.textContent = fmtTime(0);
+        rtTotal.textContent = '/ ' + fmtTime(0);
+        setRtEnabled(false);
+        rtModal.style.display = 'flex';
+
+        const info = await analyseAudio(blob, url);
+        if (!rt || rt.token !== token) return; // editor sudah ditutup / diganti
+
+        if (!info.duration) {
+            closeRingtoneEditor();
+            showAlarmStatus('Format audio ini tidak bisa dibuka browser. Coba mp3, m4a, atau wav.', true);
+            return;
+        }
+
+        rt.duration = info.duration;
+        rt.peaks = info.peaks;
+        rt.start = Math.min(start || 0, Math.max(0, rt.duration - 0.1));
+        rt.end = end ? Math.min(end, rt.duration) : Math.min(rt.duration, rt.start + RT_DEFAULT_LEN);
+        rtStart.max = rtEnd.max = String(rt.duration);
+        rtTotal.textContent = '/ ' + fmtTime(rt.duration);
+        rtWaveMsg.textContent = info.peaks ? '' : 'Gelombang tidak tersedia, potongan tetap bisa diatur dengan penggeser.';
+        clampRt('start');
+        setRtEnabled(true);
+        syncRt();
+    }
+
+    function closeRingtoneEditor() {
+        if (rt) {
+            stopRtPreview();
+            URL.revokeObjectURL(rt.url);
+            rt = null;
+        }
+        if (rtModal) rtModal.style.display = 'none';
+    }
+
+    function clampRt(changed) {
+        const gap = Math.min(RT_MIN_GAP, rt.duration);
+        if (changed === 'start') {
+            rt.start = Math.min(Math.max(0, rt.start), rt.duration - gap);
+            if (rt.end < rt.start + gap) rt.end = Math.min(rt.duration, rt.start + gap);
+        } else {
+            rt.end = Math.max(Math.min(rt.duration, rt.end), gap);
+            if (rt.start > rt.end - gap) rt.start = Math.max(0, rt.end - gap);
+        }
+    }
+
+    function syncRt() {
+        if (!rt) return;
+        rtStart.value = String(rt.start);
+        rtEnd.value = String(rt.end);
+        rtStartLabel.textContent = fmtTime(rt.start);
+        rtEndLabel.textContent = fmtTime(rt.end);
+        rtLength.textContent = 'Durasi potongan: ' + fmtTime(rt.end - rt.start);
+        drawWave();
+    }
+
+    function drawWave() {
+        if (!rt || !rtCanvas || !rt.duration) return;
+        const dpr = window.devicePixelRatio || 1;
+        const w = rtCanvas.clientWidth;
+        const h = rtCanvas.clientHeight;
+        if (!w || !h) return;
+        rtCanvas.width = Math.round(w * dpr);
+        rtCanvas.height = Math.round(h * dpr);
+        const g = rtCanvas.getContext('2d');
+        g.scale(dpr, dpr);
+
+        const css = getComputedStyle(document.documentElement);
+        const on = css.getPropertyValue('--primary-color').trim() || '#4e73df';
+        const off = css.getPropertyValue('--light-gray').trim() || '#d1d3e2';
+        const x0 = (rt.start / rt.duration) * w;
+        const x1 = (rt.end / rt.duration) * w;
+
+        g.globalAlpha = 0.12;
+        g.fillStyle = on;
+        g.fillRect(x0, 0, Math.max(1, x1 - x0), h);
+        g.globalAlpha = 1;
+
+        if (rt.peaks) {
+            const n = rt.peaks.length;
+            const bw = w / n;
+            for (let i = 0; i < n; i++) {
+                const t = ((i + 0.5) / n) * rt.duration;
+                const amp = Math.max(3, rt.peaks[i] * h * 0.85);
+                g.fillStyle = t >= rt.start && t <= rt.end ? on : off;
+                g.fillRect(i * bw + 0.5, (h - amp) / 2, Math.max(1, bw - 1.5), amp);
+            }
+        } else {
+            g.fillStyle = off;
+            g.fillRect(0, h / 2 - 4, w, 8);
+            g.fillStyle = on;
+            g.fillRect(x0, h / 2 - 4, Math.max(1, x1 - x0), 8);
+        }
+
+        // Penanda mulai & berhenti
+        g.fillStyle = on;
+        g.fillRect(Math.max(0, x0 - 1), 0, 2, h);
+        g.fillRect(Math.min(w - 2, x1 - 1), 0, 2, h);
+
+        // Posisi putar saat tes
+        if (rt.audio) {
+            const px = (rt.lastTime / rt.duration) * w;
+            g.fillStyle = '#e74a3b';
+            g.fillRect(px - 1, 0, 2, h);
+        }
+    }
+
+    function stopRtPreview() {
+        if (!rt) return;
+        if (rt.audio) {
+            rt.audio.pause();
+            rt.audio = null;
+        }
+        clearInterval(rt.guard);
+        cancelAnimationFrame(rt.raf);
+        if (rtTestBtn) rtTestBtn.textContent = '▶ Tes potongan';
+        drawWave();
+    }
+
+    function toggleRtPreview() {
+        if (!rt) return;
+        if (rt.audio) {
+            stopRtPreview();
+            return;
+        }
+        if (ringer) stopRinging(); // jangan tabrakan dengan alarm / cuplikan sidebar
+
+        const audio = new Audio(rt.url);
+        audio.volume = alarmVolume / 100;
+        try { audio.currentTime = rt.start; } catch (e) {}
+        rt.audio = audio;
+        rt.lastTime = rt.start;
+        rtTestBtn.textContent = '⏹ Stop tes';
+
+        audio.play().catch(() => {
+            rtWaveMsg.textContent = 'Browser menahan suara. Ketuk "Tes potongan" sekali lagi.';
+            stopRtPreview();
+        });
+
+        // Berhenti otomatis di titik "berhenti"
+        rt.guard = setInterval(() => {
+            if (!rt || !rt.audio) return;
+            if (rt.audio.currentTime >= rt.end - 0.02 || rt.audio.ended) stopRtPreview();
+        }, 40);
+
+        const tick = () => {
+            if (!rt || !rt.audio) return;
+            rt.lastTime = rt.audio.currentTime;
+            rtNow.textContent = fmtTime(rt.lastTime);
+            drawWave();
+            rt.raf = requestAnimationFrame(tick);
+        };
+        tick();
+    }
+
+    async function saveRingtone() {
+        if (!rt) return;
+        stopRtPreview();
+        const record = {
+            name: rt.name,
+            type: rt.type,
+            blob: rt.blob,
+            start: rt.start,
+            end: rt.end >= rt.duration - 0.05 ? null : rt.end
+        };
+        try {
+            const target = rt.target;
+            await idbRequest('readwrite', store => store.put(record, target));
+            await loadCustomSound();
+            closeRingtoneEditor();
+            const done = '✔ Nada dering disimpan. Tekan "Coba" untuk mendengar hasilnya.';
+            if (target === 'prayerSound') showPrayerStatus(done); else showAlarmStatus(done);
+        } catch (e) {
+            rtWaveMsg.textContent = 'Gagal menyimpan (penyimpanan browser penuh atau diblokir).';
+        }
+    }
+
+    function initRingtoneEditor() {
+        if (!rtModal) return;
+        rtClose.addEventListener('click', closeRingtoneEditor);
+        rtModal.addEventListener('click', e => { if (e.target === rtModal) closeRingtoneEditor(); });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && rtModal.style.display === 'flex') closeRingtoneEditor();
+        });
+
+        rtStart.addEventListener('input', () => {
+            if (!rt) return;
+            rt.start = Number(rtStart.value);
+            clampRt('start');
+            syncRt();
+        });
+        rtEnd.addEventListener('input', () => {
+            if (!rt) return;
+            rt.end = Number(rtEnd.value);
+            clampRt('end');
+            syncRt();
+        });
+        rtSetStart.addEventListener('click', () => {
+            if (!rt) return;
+            rt.start = rt.lastTime;
+            clampRt('start');
+            syncRt();
+        });
+        rtSetEnd.addEventListener('click', () => {
+            if (!rt) return;
+            rt.end = rt.lastTime || rt.end;
+            clampRt('end');
+            syncRt();
+        });
+        rtTestBtn.addEventListener('click', toggleRtPreview);
+        rtSaveBtn.addEventListener('click', saveRingtone);
+        window.addEventListener('resize', drawWave);
+    }
+
+    function initAlarms() {
+        alarmVolume = Number(localStorage.getItem('alarmVolume'));
+        if (!(alarmVolume >= 0 && alarmVolume <= 100) || localStorage.getItem('alarmVolume') === null) alarmVolume = 80;
+        if (alarmVolumeInput) alarmVolumeInput.value = alarmVolume;
+
+        if (alarmVolumeInput) {
+            alarmVolumeInput.addEventListener('input', () => {
+                alarmVolume = Number(alarmVolumeInput.value);
+                try { localStorage.setItem('alarmVolume', String(alarmVolume)); } catch (e) {}
+                if (ringer && ringer.audio && ringer.kind !== 'prayer') ringer.audio.volume = alarmVolume / 100;
+            });
+        }
+
+        if (alarmPickBtn && alarmFileInput) {
+            alarmPickBtn.addEventListener('click', () => alarmFileInput.click());
+            alarmFileInput.addEventListener('change', () => {
+                handleSoundFile(alarmFileInput.files[0]);
+                alarmFileInput.value = '';
+            });
+        }
+
+        if (alarmEditBtn) alarmEditBtn.addEventListener('click', editSavedRingtone);
+        initRingtoneEditor();
+
+        if (alarmTestBtn) {
+            alarmTestBtn.addEventListener('click', () => {
+                if (ringer && ringer.preview) stopRinging();
+                else if (!ringer) startRinging(true);
+                // jika alarm sungguhan sedang berbunyi, tombol ini diabaikan
+            });
+        }
+
+        if (alarmResetBtn) {
+            alarmResetBtn.addEventListener('click', async () => {
+                try { await idbRequest('readwrite', store => store.delete('alarmSound')); } catch (e) {}
+                await loadCustomSound();
+                showAlarmStatus('Kembali memakai nada bawaan.');
+            });
+        }
+
+        if (notifBtn) {
+            notifBtn.addEventListener('click', () => {
+                Notification.requestPermission().then(updateNotifButton).catch(() => {});
+            });
+        }
+
+        alarmSnoozeBtn.addEventListener('click', snoozeAlarm);
+        alarmDismissBtn.addEventListener('click', dismissAlarm);
+
+        // Ketukan pada kartu membantu browser HP yang menahan suara sebelum ada interaksi
+        alarmCard.addEventListener('click', () => {
+            getAudioCtx();
+            if (ringer && ringer.audio && ringer.audio.paused) ringer.audio.play().catch(() => {});
+        });
+        document.addEventListener('pointerdown', () => getAudioCtx(), { once: true });
+
+        updateNotifButton();
+        loadCustomSound();
+
+        if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+            navigator.serviceWorker.register('sw.js').catch(() => {});
+        }
+
+        setInterval(checkAlarms, 1000);
+        document.addEventListener('visibilitychange', checkAlarms);
+        checkAlarms();
+    }
+
+    // ===== Mode terang / gelap =====
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        try { localStorage.setItem('theme', theme); } catch (e) {}
+        if (themeToggle) {
+            const icon = themeToggle.querySelector('i');
+            // Mode terang tampil bulan sabit (klik -> gelap), mode gelap tampil matahari (klik -> terang)
+            icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
+            themeToggle.title = theme === 'dark' ? 'Ganti ke mode terang' : 'Ganti ke mode gelap';
+        }
+    }
+
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        applyTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    function setupEventListeners() {
+        applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+        if (themeToggle) themeToggle.addEventListener('click', toggleTheme);
+
+        // Backup & restore
+        if (exportBtn) exportBtn.addEventListener('click', exportData);
+        if (importBtn && importFile) {
+            importBtn.addEventListener('click', () => importFile.click());
+            importFile.addEventListener('change', () => {
+                if (importFile.files[0]) importData(importFile.files[0]);
+                importFile.value = ''; // supaya file yang sama bisa dipilih lagi
+            });
+        }
+
+        todayBtn.addEventListener('click', goToToday);
+        prevBtn.addEventListener('click', navigatePrevious);
+        nextBtn.addEventListener('click', navigateNext);
+
+        viewOptions.forEach(option => {
+            option.addEventListener('click', () => switchView(option.dataset.view));
+        });
+
+        if (addEventBtn) addEventBtn.addEventListener('click', openEventModal);
+        closeBtns.forEach(btn => btn.addEventListener('click', closeModals));
+        eventForm.addEventListener('submit', saveEvent);
+
+        deleteEventBtn.addEventListener('click', deleteEvent);
+        editEventBtn.addEventListener('click', editEvent);
+        closeDetailsBtn.addEventListener('click', closeModals);
+
+        window.addEventListener('click', (e) => {
+            if (e.target === eventModal || e.target === eventDetailsModal) {
+                closeModals();
+            }
+        });
+    }
+
+    function renderCalendar() {
+        calendarView.innerHTML = '';
+
+        switch (currentView) {
+            case 'day': renderDayView(); break;
+            case 'week': renderWeekView(); break;
+            case 'month': renderMonthView(); break;
+        }
+
+        updateCurrentDateDisplay();
+    }
+
+    function renderMonthView() {
+        const monthContainer = document.createElement('div');
+        monthContainer.className = 'month-view';
+
+        const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        const lastDay = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+        const daysInMonth = lastDay.getDate();
+        const startingDay = firstDay.getDay();
+
+        const monthHeader = document.createElement('div');
+        monthHeader.className = 'month-header';
+
+        const dayNames = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+        dayNames.forEach((day, idx) => {
+            const dayElement = document.createElement('div');
+            dayElement.className = 'day-header' + (idx === 0 ? ' red-text' : '');
+            dayElement.textContent = day;
+            monthHeader.appendChild(dayElement);
+        });
+
+        monthContainer.appendChild(monthHeader);
+
+        const daysGrid = document.createElement('div');
+        daysGrid.className = 'month-days';
+
+        for (let i = 0; i < startingDay; i++) {
+            const prevMonthDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0 - (startingDay - i - 1));
+            daysGrid.appendChild(createDayCell(prevMonthDay, true));
+        }
+
+        const today = new Date();
+        for (let i = 1; i <= daysInMonth; i++) {
+            const dayDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), i);
+            const isToday = dayDate.toDateString() === today.toDateString();
+            daysGrid.appendChild(createDayCell(dayDate, false, isToday));
+        }
+
+        const totalCells = Math.ceil((startingDay + daysInMonth) / 7) * 7;
+        const remainingCells = totalCells - (startingDay + daysInMonth);
+        for (let i = 1; i <= remainingCells; i++) {
+            const nextMonthDay = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, i);
+            daysGrid.appendChild(createDayCell(nextMonthDay, true));
+        }
+
+        monthContainer.appendChild(daysGrid);
+        calendarView.appendChild(monthContainer);
+    }
+
+    function createDayCell(date, isOtherMonth, isToday = false) {
+        const dayCell = document.createElement('div');
+        dayCell.className = `day-cell ${isOtherMonth ? 'other-month' : ''} ${isToday ? 'current-day' : ''}`;
+
+        const holidayName = getHolidayName(date);
+        if (isRedDate(date)) dayCell.classList.add('red-date');
+        if (isTodayDate(date)) {
+            dayCell.classList.add('current-day');
+            dayCell.appendChild(createTodayStamp());
+        }
+
+        const dayNumber = document.createElement('div');
+        dayNumber.className = 'day-number';
+        dayNumber.textContent = date.getDate();
+        dayCell.appendChild(dayNumber);
+
+        const noteBadge = createNoteBadge(date);
+        if (noteBadge) {
+            dayCell.appendChild(noteBadge);
+            dayCell.classList.add('has-notes');
+        }
+
+        const reguBadge = createReguBadge(date, userRegu);
+        if (reguBadge) {
+            dayCell.appendChild(reguBadge);
+            dayCell.classList.add('regu-' + reguStatus(date, userRegu));
+        }
+
+        if (holidayName) {
+            dayCell.title = holidayName;
+            const hl = document.createElement('div');
+            hl.className = 'holiday-label';
+            hl.textContent = holidayName;
+            dayCell.appendChild(hl);
+        }
+
+        const dayEventsContainer = document.createElement('div');
+        dayEventsContainer.className = 'day-events';
+
+        const dayEvents = getEventsForDate(date);
+
+        const maxEventsToShow = holidayName ? 2 : 3;
+        let eventsShown = 0;
+        let spaceUsed = 0;
+
+        for (const event of dayEvents) {
+            if (eventsShown >= maxEventsToShow || spaceUsed >= maxEventsToShow) break;
+
+            const eventElement = document.createElement('div');
+            eventElement.className = 'day-event month-event';
+            eventElement.textContent = event.title;
+            eventElement.style.backgroundColor = event.color;
+
+            spaceUsed += event.title.length > 15 ? 1.5 : 1;
+
+            if (spaceUsed <= maxEventsToShow) {
+                dayEventsContainer.appendChild(eventElement);
+                eventsShown++;
+
+                eventElement.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showEventDetails(event.id);
+                });
+            }
+        }
+
+        if (dayEvents.length > eventsShown) {
+            const moreEvents = document.createElement('div');
+            moreEvents.className = 'day-event month-event';
+            moreEvents.textContent = `+${dayEvents.length - eventsShown} lainnya`;
+            moreEvents.style.backgroundColor = '#5a5c69';
+            dayEventsContainer.appendChild(moreEvents);
+        }
+
+        dayCell.appendChild(dayEventsContainer);
+
+        dayCell.addEventListener('click', () => {
+            currentDate = new Date(date);
+            if (isOtherMonth) {
+                if (currentView === 'month') renderCalendar();
+                else switchView('month');
+            } else {
+                switchView('day');
+            }
+        });
+
+        return dayCell;
+    }
+
+    function renderWeekView() {
+        const weekContainer = document.createElement('div');
+        weekContainer.className = 'week-view';
+
+        const weekHeader = document.createElement('div');
+        weekHeader.className = 'week-header';
+        weekHeader.appendChild(document.createElement('div'));
+
+        const startOfWeek = new Date(currentDate);
+        startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
+
+        const today = new Date();
+        for (let i = 0; i < 7; i++) {
+            const dayDate = new Date(startOfWeek);
+            dayDate.setDate(startOfWeek.getDate() + i);
+
+            const dayHeader = document.createElement('div');
+            dayHeader.className = 'week-day-header';
+
+            if (dayDate.toDateString() === today.toDateString()) dayHeader.classList.add('current-day');
+            if (isRedDate(dayDate)) dayHeader.classList.add('red-text');
+
+            const holidayName = getHolidayName(dayDate);
+            if (holidayName) dayHeader.title = holidayName;
+
+            dayHeader.innerHTML = `
+                <div>${['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'][i]}</div>
+                <div>${dayDate.getDate()}</div>
+            `;
+            if (isTodayDate(dayDate)) dayHeader.appendChild(createTodayStamp());
+            const reguB = createReguBadge(dayDate, userRegu);
+            if (reguB) {
+                reguB.classList.add('inline');
+                dayHeader.appendChild(reguB);
+            }
+            const weekNotes = noteCount(dateKey(dayDate));
+            if (weekNotes) {
+                const chip = document.createElement('span');
+                chip.className = 'week-note-chip';
+                chip.textContent = '📝 ' + weekNotes;
+                chip.title = weekNotes + ' catatan';
+                dayHeader.appendChild(chip);
+            }
+            weekHeader.appendChild(dayHeader);
+        }
+
+        weekContainer.appendChild(weekHeader);
+
+        const weekGrid = document.createElement('div');
+        weekGrid.className = 'week-grid';
+
+        for (let hour = 0; hour < 24; hour++) {
+            const hourLabel = document.createElement('div');
+            hourLabel.className = 'hour-label';
+            hourLabel.textContent = `${String(hour).padStart(2, '0')}.00`;
+            weekGrid.appendChild(hourLabel);
+
+            for (let day = 0; day < 7; day++) {
+                const dayDate = new Date(startOfWeek);
+                dayDate.setDate(startOfWeek.getDate() + day);
+                dayDate.setHours(hour);
+
+                const dayCell = document.createElement('div');
+                dayCell.className = 'week-cell' + (isRedDate(dayDate) ? ' red-bg' : '');
+                weekGrid.appendChild(dayCell);
+
+                getEventsForDateAndHour(dayDate, hour).forEach(event => {
+                    const eventElement = document.createElement('div');
+                    eventElement.className = 'week-event';
+                    eventElement.textContent = event.title;
+                    eventElement.style.backgroundColor = event.color;
+
+                    const startMinutes = new Date(event.startTime).getHours() * 60 + new Date(event.startTime).getMinutes();
+                    const endMinutes = new Date(event.endTime).getHours() * 60 + new Date(event.endTime).getMinutes();
+                    const height = ((endMinutes - startMinutes) / 60) * 60;
+                    const position = (startMinutes % 60) / 60 * 60;
+
+                    eventElement.style.top = `${position}px`;
+                    eventElement.style.height = `${height}px`;
+
+                    dayCell.appendChild(eventElement);
+
+                    eventElement.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        showEventDetails(event.id);
+                    });
+                });
+
+                dayCell.addEventListener('click', () => {
+                    currentDate = new Date(dayDate);
+                    openEventModalWithTime(hour);
+                });
+            }
+        }
+
+        weekContainer.appendChild(weekGrid);
+        calendarView.appendChild(weekContainer);
+    }
+
+    function renderDayView() {
+        const dayContainer = document.createElement('div');
+        dayContainer.className = 'day-view';
+
+        const dayHeader = document.createElement('div');
+        dayHeader.className = 'day-header' + (isRedDate(currentDate) ? ' red-text' : '');
+        const h2 = document.createElement('h2');
+        h2.textContent = currentDate.toLocaleDateString('id-ID', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+        dayHeader.appendChild(h2);
+        if (isTodayDate(currentDate)) {
+            const pill = document.createElement('span');
+            pill.className = 'today-pill';
+            pill.textContent = '📍 Hari Ini';
+            dayHeader.appendChild(pill);
+        }
+        const dayRegu = createReguBadge(currentDate, userRegu);
+        if (dayRegu) {
+            dayRegu.classList.add('inline');
+            dayHeader.appendChild(dayRegu);
+        }
+        const holidayName = getHolidayName(currentDate);
+        if (holidayName) {
+            const hl = document.createElement('div');
+            hl.className = 'holiday-banner';
+            hl.textContent = '🎌 ' + holidayName;
+            dayHeader.appendChild(hl);
+        }
+        const board = createReguBoard(currentDate);
+        if (board) dayHeader.appendChild(board);
+        dayContainer.appendChild(dayHeader);
+        dayContainer.appendChild(createDayNotesSection(currentDate));
+
+        const dayGrid = document.createElement('div');
+        dayGrid.className = 'day-grid';
+
+        for (let hour = 0; hour < 24; hour++) {
+            const hourLabel = document.createElement('div');
+            hourLabel.className = 'day-hour-label hour-label';
+            hourLabel.textContent = `${String(hour).padStart(2, '0')}.00`;
+            dayGrid.appendChild(hourLabel);
+
+            const timeBlock = document.createElement('div');
+            timeBlock.className = 'day-time-block day-hour';
+            dayGrid.appendChild(timeBlock);
+
+            getEventsForDateAndHour(currentDate, hour).forEach(event => {
+                const eventElement = document.createElement('div');
+                eventElement.className = 'day-event';
+                eventElement.textContent = `${formatTime(new Date(event.startTime))} - ${event.title}`;
+                eventElement.style.backgroundColor = event.color;
+
+                const startMinutes = new Date(event.startTime).getHours() * 60 + new Date(event.startTime).getMinutes();
+                const endMinutes = new Date(event.endTime).getHours() * 60 + new Date(event.endTime).getMinutes();
+                const height = ((endMinutes - startMinutes) / 60) * 60;
+                const position = (startMinutes % 60) / 60 * 60;
+
+                eventElement.style.top = `${position}px`;
+                eventElement.style.height = `${height}px`;
+
+                timeBlock.appendChild(eventElement);
+
+                eventElement.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showEventDetails(event.id);
+                });
+            });
+
+            timeBlock.addEventListener('click', () => openEventModalWithTime(hour));
+        }
+
+        dayContainer.appendChild(dayGrid);
+        calendarView.appendChild(dayContainer);
+    }
+
+    function renderEventsList() {
+        eventsList.innerHTML = '';
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const upcomingEvents = events
+            .filter(event => new Date(event.startTime) >= today)
+            .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+        if (upcomingEvents.length === 0) {
+            const noEvents = document.createElement('div');
+            noEvents.className = 'no-events';
+            noEvents.textContent = 'Belum ada acara mendatang. Klik jam atau tanggal untuk menambah.';
+            eventsList.appendChild(noEvents);
+            return;
+        }
+
+        upcomingEvents.forEach(event => {
+            const eventElement = document.createElement('div');
+            eventElement.className = 'event-item';
+            eventElement.style.borderLeftColor = event.color;
+
+            const startDate = new Date(event.startTime);
+            const endDate = new Date(event.endTime);
+
+            eventElement.innerHTML = `
+                <div class="event-title">
+                    <span>${escapeHtml(event.title)}${event.alarm ? ' 🔔' : ''}</span>
+                    <span style="color: ${event.color}">●</span>
+                </div>
+                <div class="event-time">${formatDateTime(startDate, endDate)}</div>
+                ${event.description ? `<div class="event-description">${escapeHtml(event.description)}</div>` : ''}
+            `;
+
+            eventsList.appendChild(eventElement);
+            eventElement.addEventListener('click', () => showEventDetails(event.id));
+        });
+    }
+
+    function getEventsForDate(date) {
+        const key = dateKey(date);
+        return events.filter(event => dateKey(new Date(event.startTime)) === key);
+    }
+
+    function getEventsForDateAndHour(date, hour) {
+        const key = dateKey(date);
+        return events.filter(event => {
+            const s = new Date(event.startTime);
+            return dateKey(s) === key && s.getHours() === hour;
+        });
+    }
+
+    function updateCurrentDateDisplay() {
+        switch (currentView) {
+            case 'day':
+                currentDateElement.textContent = currentDate.toLocaleDateString('id-ID', {
+                    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+                });
+                break;
+            case 'week': {
+                const startOfWeek = new Date(currentDate);
+                startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
+                const endOfWeek = new Date(startOfWeek);
+                endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+                currentDateElement.textContent =
+                    `${startOfWeek.toLocaleDateString('id-ID', { month: 'short', day: 'numeric' })} - ` +
+                    `${endOfWeek.toLocaleDateString('id-ID', {
+                        month: endOfWeek.getMonth() !== startOfWeek.getMonth() ? 'short' : undefined,
+                        day: 'numeric',
+                        year: endOfWeek.getFullYear() !== startOfWeek.getFullYear() ? 'numeric' : undefined
+                    })}`;
+                break;
+            }
+            case 'month':
+                currentDateElement.textContent = currentDate.toLocaleDateString('id-ID', {
+                    month: 'long', year: 'numeric'
+                });
+                break;
+        }
+    }
+
+    function switchView(view) {
+        currentView = view;
+        viewOptions.forEach(option => {
+            option.classList.toggle('active', option.dataset.view === view);
+        });
+        renderCalendar();
+    }
+
+    function navigatePrevious() {
+        switch (currentView) {
+            case 'day': currentDate.setDate(currentDate.getDate() - 1); break;
+            case 'week': currentDate.setDate(currentDate.getDate() - 7); break;
+            case 'month': currentDate.setDate(1); currentDate.setMonth(currentDate.getMonth() - 1); break;
+        }
+        renderCalendar();
+    }
+
+    function navigateNext() {
+        switch (currentView) {
+            case 'day': currentDate.setDate(currentDate.getDate() + 1); break;
+            case 'week': currentDate.setDate(currentDate.getDate() + 7); break;
+            case 'month': currentDate.setDate(1); currentDate.setMonth(currentDate.getMonth() + 1); break;
+        }
+        renderCalendar();
+    }
+
+    function goToToday() {
+        currentDate = new Date();
+        renderCalendar();
+    }
+
+    function openEventModal() {
+        editingEventId = null;
+        if (formTitle) formTitle.textContent = 'Tambah Acara Baru';
+        eventForm.reset();
+        eventDateInput.value = dateKey(currentDate);
+        eventStartTimeInput.value = '09:00';
+        eventEndTimeInput.value = '10:00';
+        eventColorInput.value = '#4e73df';
+        eventModal.style.display = 'flex';
+    }
+
+    function openEventModalWithTime(hour) {
+        openEventModal();
+        eventStartTimeInput.value = `${hour.toString().padStart(2, '0')}:00`;
+        eventEndTimeInput.value = `${Math.min(hour + 1, 23).toString().padStart(2, '0')}:${hour === 23 ? '59' : '00'}`;
+    }
+
+    function closeModals() {
+        eventModal.style.display = 'none';
+        eventDetailsModal.style.display = 'none';
+    }
+
+    function buildDateTime(dateStr, timeStr) {
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const [hh, mm] = timeStr.split(':').map(Number);
+        return new Date(y, m - 1, d, hh, mm);
+    }
+
+    function saveEvent(e) {
+        e.preventDefault();
+
+        const startDateTime = buildDateTime(eventDateInput.value, eventStartTimeInput.value);
+        const endDateTime = buildDateTime(eventDateInput.value, eventEndTimeInput.value);
+        const alarmOn = eventAlarmInput ? eventAlarmInput.checked : false;
+        const alarmBefore = eventAlarmBeforeSelect ? (parseInt(eventAlarmBeforeSelect.value, 10) || 0) : 0;
+
+        if (editingEventId) {
+            const ev = events.find(x => x.id === editingEventId);
+            if (ev) {
+                ev.title = eventTitleInput.value;
+                ev.startTime = startDateTime.toISOString();
+                ev.endTime = endDateTime.toISOString();
+                ev.description = eventDescriptionInput.value;
+                ev.color = eventColorInput.value;
+                ev.alarm = alarmOn;
+                ev.alarmBefore = alarmBefore;
+                markPastAlarmFired(ev);
+            }
+            editingEventId = null;
+        } else {
+            const newEvent = {
+                id: Date.now().toString(),
+                title: eventTitleInput.value,
+                startTime: startDateTime.toISOString(),
+                endTime: endDateTime.toISOString(),
+                description: eventDescriptionInput.value,
+                color: eventColorInput.value,
+                alarm: alarmOn,
+                alarmBefore: alarmBefore
+            };
+            events.push(newEvent);
+            markPastAlarmFired(newEvent); // jangan bunyikan alarm untuk waktu yang sudah lewat
+        }
+
+        // Minta izin notifikasi saat pertama kali membuat acara beralarm (harus dari aksi pengguna)
+        if (alarmOn && 'Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission().then(updateNotifButton).catch(() => {});
+        }
+
+        saveEventsToStorage();
+        renderCalendar();
+        renderEventsList();
+        closeModals();
+    }
+
+    function showEventDetails(eventId) {
+        const event = events.find(e => e.id === eventId);
+        if (!event) return;
+
+        selectedEventId = eventId;
+
+        detailsTitle.textContent = event.title;
+        detailsDate.textContent = new Date(event.startTime).toLocaleDateString('id-ID', {
+            weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+        });
+        detailsTime.textContent = `${formatTime(new Date(event.startTime))} - ${formatTime(new Date(event.endTime))}`;
+        detailsDescription.textContent = event.description || 'Tidak ada deskripsi';
+        if (detailsAlarm) {
+            detailsAlarm.textContent = event.alarm
+                ? (event.alarmBefore ? `Alarm ${event.alarmBefore} menit sebelumnya` : 'Alarm tepat waktu')
+                : 'Alarm mati';
+        }
+
+        eventDetailsModal.style.display = 'flex';
+    }
+
+    function editEvent() {
+        if (!selectedEventId) return;
+
+        const event = events.find(e => e.id === selectedEventId);
+        if (!event) return;
+
+        editingEventId = selectedEventId;
+        if (formTitle) formTitle.textContent = 'Edit Acara';
+
+        const startDate = new Date(event.startTime);
+        const endDate = new Date(event.endTime);
+
+        eventTitleInput.value = event.title;
+        eventDateInput.value = dateKey(startDate);
+        eventStartTimeInput.value = `${startDate.getHours().toString().padStart(2, '0')}:${startDate.getMinutes().toString().padStart(2, '0')}`;
+        eventEndTimeInput.value = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`;
+        eventDescriptionInput.value = event.description || '';
+        eventColorInput.value = event.color;
+        if (eventAlarmInput) eventAlarmInput.checked = !!event.alarm;
+        if (eventAlarmBeforeSelect) eventAlarmBeforeSelect.value = String(event.alarmBefore || 0);
+
+        closeModals();
+        eventModal.style.display = 'flex';
+    }
+
+    function deleteEvent() {
+        if (!selectedEventId) return;
+
+        if (confirm('Yakin ingin menghapus acara ini?')) {
+            events = events.filter(event => event.id !== selectedEventId);
+            saveEventsToStorage();
+            renderCalendar();
+            renderEventsList();
+            closeModals();
+        }
+    }
+
+    function saveEventsToStorage() {
+        localStorage.setItem('events', JSON.stringify(events));
+    }
+
+    // Helper functions
+    function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function formatTime(date) {
+        return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    function formatDateTime(startDate, endDate) {
+        const isSameDay = startDate.toDateString() === endDate.toDateString();
+        const fmt = d => d.toLocaleDateString('id-ID', { month: 'short', day: 'numeric' });
+
+        if (isSameDay) {
+            return `${fmt(startDate)} • ${formatTime(startDate)} - ${formatTime(endDate)}`;
+        }
+        return `${fmt(startDate)} ${formatTime(startDate)} - ${fmt(endDate)} ${formatTime(endDate)}`;
+    }
+
+});
