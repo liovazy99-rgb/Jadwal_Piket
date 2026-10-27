@@ -144,6 +144,14 @@ document.addEventListener('DOMContentLoaded', function() {
     let prayerState = '';                             // '', 'loading', 'ok', 'fail'
     let prayerLoading = false;
     let prayerLastSig = '';
+
+    // Lampiran catatan (state; fungsinya ada di bagian bawah)
+    const ATT_MAX_FILES = 30;
+    const attUrlCache = new Map();           // id -> object URL
+    let editFiles = [];                      // lampiran pada editor: { id, name, type, size, blob?, url? }
+    let editRemoved = [];                    // id lampiran lama yang dihapus di editor
+    let attSaving = false;
+
     const WX_LAT = -6.1086, WX_LON = 106.8805;      // Tanjung Priok, Jakarta Utara
     const WX_KEY = 'weather_v1';
     const WX_TTL = 30 * 60 * 1000;
@@ -396,15 +404,26 @@ document.addEventListener('DOMContentLoaded', function() {
         showBackupStatus._t = setTimeout(() => { backupStatus.textContent = ''; }, 6000);
     }
 
-    function exportData() {
+    async function exportData() {
+        let attachments = {};
+        let attNote = '';
+        try { attachments = await collectAttachmentsForExport(); } catch (e) { attNote = ' (lampiran tidak ikut: terlalu besar)'; }
         const payload = {
             app: 'kalender-acara',
             version: 1,
             exportedAt: new Date().toISOString(),
             events,
-            notes
+            notes,
+            attachments
         };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        let blob;
+        try {
+            blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        } catch (e) {
+            payload.attachments = {};
+            attNote = ' (lampiran tidak ikut: terlalu besar untuk satu file backup)';
+            blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        }
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -413,7 +432,7 @@ document.addEventListener('DOMContentLoaded', function() {
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        showBackupStatus(`✔ ${events.length} acara dan ${countAllNotes()} catatan diekspor.`);
+        showBackupStatus(`✔ ${events.length} acara dan ${countAllNotes()} catatan diekspor.` + attNote);
     }
 
     // Rapikan & validasi satu acara dari file backup
@@ -437,7 +456,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function importData(file) {
         const reader = new FileReader();
         reader.onerror = () => showBackupStatus('Gagal membaca file.', true);
-        reader.onload = () => {
+        reader.onload = async () => {
             let parsed;
             try {
                 parsed = JSON.parse(reader.result);
@@ -472,6 +491,7 @@ document.addEventListener('DOMContentLoaded', function() {
             events = events.concat(fresh);
             fresh.forEach(markPastAlarmFired);
             saveEventsToStorage();
+            await restoreImportedAttachments(freshNotes, parsed && parsed.attachments);
             freshNotes.forEach(x => { (notes[x.key] = notes[x.key] || []).push(x.note); });
             if (freshNotes.length) saveNotes();
 
@@ -852,7 +872,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!n || typeof n !== 'object') return null;
         const title = String(n.title || '').slice(0, 80);
         const body = String(n.body || '').slice(0, 2000);
-        if (!title.trim() && !body.trim()) return null;
+        const files = sanitizeFiles(n.files);
+        if (!title.trim() && !body.trim() && !files.length) return null;
         const created = Number(n.createdAt) || Date.now();
         return {
             id: String(n.id || newNoteId()),
@@ -860,6 +881,7 @@ document.addEventListener('DOMContentLoaded', function() {
             color: NOTE_COLORS.some(c => c.v === n.color) ? n.color : NOTE_COLORS[0].v,
             pinned: !!n.pinned,
             done: !!n.done,
+            files,
             createdAt: created,
             updatedAt: Number(n.updatedAt) || created
         };
@@ -944,6 +966,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function deleteNote(key, id) {
         if (!confirm('Hapus catatan ini?')) return false;
+        attDeleteAll(((notes[key] || []).find(n => n.id === id) || {}).files);
         removeNote(key, id);
         saveNotes();
         refreshNotesUI();
@@ -960,6 +983,17 @@ document.addEventListener('DOMContentLoaded', function() {
         const first = sortedNotes(key).slice(0, 3).map(x => '• ' + (x.title.trim() || x.body.trim()).slice(0, 40));
         badge.title = `${n} catatan:\n` + first.join('\n') + (n > 3 ? '\n…' : '');
         return badge;
+    }
+
+    // Ikon garis (SVG) untuk tombol catatan
+    function noteIcon(name) {
+        const open = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+        const paths = {
+            pin: '<path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6z"/>',
+            share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.5l6.8-4M8.6 13.5l6.8 4"/>',
+            trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 11v5M14 11v5"/>'
+        };
+        return open + (paths[name] || '') + '</svg>';
     }
 
     function createNoteCard(note, key, opts) {
@@ -991,6 +1025,16 @@ document.addEventListener('DOMContentLoaded', function() {
             b.textContent = note.body;
             main.appendChild(b);
         }
+        if (note.files && note.files.length) {
+            if (opts.compact) {
+                const c = document.createElement('div');
+                c.className = 'note-att-count';
+                c.textContent = '📎 ' + note.files.length + ' lampiran';
+                main.appendChild(c);
+            } else {
+                main.appendChild(createAttachmentsView(note.files, key, note.id));
+            }
+        }
         const meta = document.createElement('div');
         meta.className = 'note-meta';
         meta.textContent = (note.pinned ? '📌 ' : '') + (opts.showDate ? noteDateLabel(key, true) + ' • ' : '') +
@@ -1006,18 +1050,26 @@ document.addEventListener('DOMContentLoaded', function() {
             const pin = document.createElement('button');
             pin.type = 'button';
             pin.className = 'note-icon-btn' + (note.pinned ? ' on' : '');
-            pin.textContent = '📌';
+            pin.innerHTML = noteIcon('pin');
             pin.title = note.pinned ? 'Lepas sematan' : 'Sematkan di atas';
             pin.setAttribute('aria-label', pin.title);
             pin.addEventListener('click', e => { e.stopPropagation(); patchNote(key, note.id, { pinned: !note.pinned }); });
             const del = document.createElement('button');
             del.type = 'button';
             del.className = 'note-icon-btn';
-            del.textContent = '🗑️';
+            del.innerHTML = noteIcon('trash');
             del.title = 'Hapus catatan';
             del.setAttribute('aria-label', 'Hapus catatan');
             del.addEventListener('click', e => { e.stopPropagation(); deleteNote(key, note.id); });
+            const share = document.createElement('button');
+            share.type = 'button';
+            share.className = 'note-icon-btn';
+            share.innerHTML = noteIcon('share');
+            share.title = 'Bagikan catatan';
+            share.setAttribute('aria-label', 'Bagikan catatan');
+            share.addEventListener('click', e => { e.stopPropagation(); shareNote(key, note); });
             actions.appendChild(pin);
+            actions.appendChild(share);
             actions.appendChild(del);
             card.appendChild(actions);
         }
@@ -1184,6 +1236,7 @@ document.addEventListener('DOMContentLoaded', function() {
         $('note-counter').textContent = `${$('note-body').value.length} / 2000`;
         $('note-error').textContent = '';
         $('note-delete').hidden = !existing;
+        attEditInit(existing);
         $('note-modal').style.display = 'flex';
         setTimeout(() => { try { (existing ? $('note-body') : $('note-title')).focus(); } catch (e) {} }, 50);
     }
@@ -1192,19 +1245,52 @@ document.addEventListener('DOMContentLoaded', function() {
         const m = document.getElementById('note-modal');
         if (m) m.style.display = 'none';
         editingNote = null;
+        attEditReset();
     }
 
-    function saveNoteFromForm() {
+    async function saveNoteFromForm() {
+        if (attSaving) return;
         const $ = x => document.getElementById(x);
         const title = $('note-title').value.trim();
         const body = $('note-body').value.replace(/\s+$/, '');
-        if (!title && !body.trim()) {
-            $('note-error').textContent = 'Isi judul atau catatannya dulu.';
+        if (!title && !body.trim() && !editFiles.length) {
+            $('note-error').textContent = 'Isi judul, catatan, atau lampiran dulu.';
             return;
         }
         const key = $('note-date').value || dateKey(new Date());
         const picked = document.querySelector('input[name="note-color"]:checked');
         const now = Date.now();
+        if (editFiles.some(f => f.pending)) {
+            $('note-error').textContent = 'Tunggu proses lampiran selesai dulu.';
+            return;
+        }
+        // Simpan lampiran baru lebih dulu; jika gagal, catatan tidak diubah
+        attSaving = true;
+        const saveBtn = document.querySelector('#note-form .note-save-btn');
+        const saveLabel = saveBtn.textContent;
+        const todo = editFiles.filter(f => f.blob);
+        const totalBytes = todo.reduce((a, f) => a + f.size, 0) || 1;
+        let savedBytes = 0;
+        saveBtn.disabled = true;
+        try {
+            for (const f of todo) {
+                saveBtn.textContent = `Menyimpan… ${Math.round(savedBytes / totalBytes * 100)}%`;
+                await attPut(f.id, f.blob, f.name, f.type);
+                savedBytes += f.size;
+            }
+            saveBtn.textContent = todo.length ? 'Menyimpan… 100%' : saveLabel;
+            saveBtn.disabled = false;
+            saveBtn.textContent = saveLabel;
+        } catch (e) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = saveLabel;
+            attSaving = false;
+            $('note-error').textContent = 'Lampiran gagal disimpan (penyimpanan perangkat penuh atau dibatasi browser).';
+            return;
+        }
+        editRemoved.forEach(id => attDelete(id));
+        const savedFiles = editFiles.map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size }));
+        attSaving = false;
         let base = { id: newNoteId(), createdAt: now, done: false };
         if (editingNote) {
             const old = (notes[editingNote.key] || []).find(n => n.id === editingNote.id);
@@ -1217,6 +1303,7 @@ document.addEventListener('DOMContentLoaded', function() {
             title, body,
             color: picked ? picked.value : NOTE_COLORS[0].v,
             pinned: $('note-pinned').checked,
+            files: savedFiles,
             updatedAt: now
         });
         (notes[key] = notes[key] || []).push(note);
@@ -1224,6 +1311,583 @@ document.addEventListener('DOMContentLoaded', function() {
         closeNoteEditor();
         refreshNotesUI();
     }
+
+    // ===== Lampiran catatan (foto & file) =====
+    // Metadata ada di catatan (note.files); isi filenya di IndexedDB dengan kunci "att:<id>".
+    function attPut(id, blob, name, type) { return idbRequest('readwrite', s => s.put({ blob, name, type }, 'att:' + id)); }
+    function attGet(id) { return idbRequest('readonly', s => s.get('att:' + id)); }
+    function attDelete(id) {
+        const u = attUrlCache.get(id);
+        if (u) { URL.revokeObjectURL(u); attUrlCache.delete(id); }
+        return idbRequest('readwrite', s => s.delete('att:' + id)).catch(() => {});
+    }
+    function attDeleteAll(files) { (files || []).forEach(f => attDelete(f.id)); }
+
+    function attUrl(id) {
+        if (attUrlCache.has(id)) return Promise.resolve(attUrlCache.get(id));
+        return attGet(id).then(rec => {
+            if (!rec || !rec.blob) return null;
+            const u = URL.createObjectURL(rec.blob);
+            attUrlCache.set(id, u);
+            return u;
+        }).catch(() => null);
+    }
+
+    function fmtSize(b) {
+        if (b < 1024) return b + ' B';
+        if (b < 1024 * 1024) return (b / 1024).toFixed(0) + ' KB';
+        return (b / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    function fileIcon(type, name) {
+        if (/^image\//.test(type)) return '🖼️';
+        if (/^video\//.test(type)) return '🎬';
+        if (/^audio\//.test(type)) return '🎵';
+        if (/pdf/.test(type) || /\.pdf$/i.test(name)) return '📕';
+        if (/sheet|excel|csv/.test(type) || /\.(xlsx?|csv)$/i.test(name)) return '📊';
+        if (/word|document|rtf/.test(type) || /\.(docx?|rtf)$/i.test(name)) return '📘';
+        if (/zip|rar|7z|tar/.test(type) || /\.(zip|rar|7z|tar|gz)$/i.test(name)) return '🗜️';
+        return '📄';
+    }
+
+    // Foto dikecilkan (maks 1600 px) supaya hemat tempat; file lain disimpan apa adanya
+    function compressImage(file) {
+        if (!/^image\/(jpeg|png|webp|heic|heif|bmp)$/i.test(file.type)) return Promise.resolve(file);
+        return new Promise(resolve => {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                const max = 1600;
+                const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+                if (scale === 1 && file.size < 600 * 1024) return resolve(file);
+                const c = document.createElement('canvas');
+                c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                c.toBlob(b => resolve(b && b.size < file.size ? b : file), 'image/jpeg', 0.82);
+            };
+            img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+            img.src = url;
+        });
+    }
+
+    // Warna & label jenis file (untuk ikon file selain foto)
+    function fileBadge(type, name) {
+        const m = /\.([A-Za-z0-9]{1,5})$/.exec(name || '');
+        const ext = m ? m[1].toUpperCase() : '';
+        let color = '#858796';
+        if (/pdf/i.test(type) || ext === 'PDF') color = '#e74a3b';
+        else if (/word|document|rtf/i.test(type) || /^(DOCX?|RTF|ODT|TXT)$/.test(ext)) color = '#2b6cb0';
+        else if (/sheet|excel|csv/i.test(type) || /^(XLSX?|CSV|ODS)$/.test(ext)) color = '#1cc88a';
+        else if (/presentation|powerpoint/i.test(type) || /^(PPTX?|ODP)$/.test(ext)) color = '#fd7e14';
+        else if (/zip|rar|7z|tar|gzip|compressed/i.test(type) || /^(ZIP|RAR|7Z|TAR|GZ|ISO)$/.test(ext)) color = '#d97706';
+        else if (/^audio\//.test(type)) color = '#6f42c1';
+        else if (/^video\//.test(type)) color = '#d63384';
+        return { label: ext ? ext.slice(0, 4) : (/^video\//.test(type) ? 'VID' : /^audio\//.test(type) ? 'AUD' : 'FILE'), color };
+    }
+
+    function attExists(id) {
+        return idbRequest('readonly', s => s.count('att:' + id)).then(n => n > 0).catch(() => false);
+    }
+
+    // Unduh dengan indikator persen (menyiapkan file dari penyimpanan perangkat)
+    async function downloadAttachment(f, setProgress) {
+        try {
+            const rec = await attGet(f.id);
+            if (!rec || !rec.blob) { alert('File tidak ada di perangkat ini.'); return false; }
+            let blob = rec.blob;
+            if (setProgress) {
+                setProgress(0);
+                blob = await readWithProgress(rec.blob, setProgress);
+                setProgress(100);
+            }
+            const u = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = u; a.download = f.name;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(u), 60000);
+            return true;
+        } catch (e) {
+            alert('Gagal menyiapkan file.');
+            return false;
+        } finally {
+            if (setProgress) setProgress(null);
+        }
+    }
+
+    // File hilang dari perangkat (mis. data browser terhapus / perangkat lain): pilih file yang sama lagi
+    function attRelink(f, setProgress) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.onchange = async () => {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            try {
+                setProgress && setProgress(0, 'Membaca');
+                let blob = await readWithProgress(file, p => setProgress && setProgress(p, 'Membaca'));
+                if (/^image\//.test(f.type)) blob = await compressImage(blob);
+                await attPut(f.id, blob, f.name, f.type);
+                const old = attUrlCache.get(f.id);
+                if (old) { URL.revokeObjectURL(old); attUrlCache.delete(f.id); }
+                refreshNotesUI();
+            } catch (e) {
+                alert('File gagal disimpan ulang.');
+                setProgress && setProgress(null);
+            }
+        };
+        input.click();
+    }
+
+    // Penampil foto layar penuh
+    let viewerList = [], viewerIdx = 0;
+    function openViewer(images, idx) {
+        viewerList = images; viewerIdx = idx;
+        document.getElementById('att-viewer').style.display = 'flex';
+        showViewer();
+    }
+    function showViewer() {
+        const f = viewerList[viewerIdx];
+        const img = document.getElementById('att-viewer-img');
+        img.removeAttribute('src');
+        document.getElementById('att-viewer-name').textContent = f.name + (viewerList.length > 1 ? `  (${viewerIdx + 1}/${viewerList.length})` : '');
+        document.getElementById('att-viewer-prev').hidden = document.getElementById('att-viewer-next').hidden = viewerList.length < 2;
+        attUrl(f.id).then(u => { if (viewerList[viewerIdx] === f && u) img.src = u; });
+    }
+    function closeViewer() { document.getElementById('att-viewer').style.display = 'none'; }
+    function stepViewer(d) {
+        if (viewerList.length < 2) return;
+        viewerIdx = (viewerIdx + d + viewerList.length) % viewerList.length;
+        showViewer();
+    }
+
+    // Tampilan lampiran di kartu catatan
+    function createAttachmentsView(files, key, noteId) {
+        const wrap = document.createElement('div');
+        wrap.className = 'att-view';
+        wrap.addEventListener('click', e => e.stopPropagation());
+        const images = files.filter(f => /^image\//.test(f.type));
+        const others = files.filter(f => !/^image\//.test(f.type));
+
+        // Pembuat indikator persen kecil di sebuah elemen
+        function progressUI(host) {
+            const bar = document.createElement('div');
+            bar.className = 'att-progress';
+            bar.hidden = true;
+            const fill = document.createElement('div');
+            fill.className = 'att-progress-fill';
+            bar.appendChild(fill);
+            const txt = document.createElement('small');
+            txt.className = 'att-progress-text';
+            txt.hidden = true;
+            host.append(bar, txt);
+            return (p, label) => {
+                if (p == null) { bar.hidden = txt.hidden = true; return; }
+                bar.hidden = txt.hidden = false;
+                fill.style.width = p + '%';
+                txt.textContent = (label || 'Menyiapkan') + ' ' + p + '%';
+            };
+        }
+
+        function removeFromNote(f) {
+            if (!confirm('Hapus lampiran "' + f.name + '" dari catatan ini?')) return;
+            const n = (notes[key] || []).find(x => x.id === noteId);
+            if (!n) return;
+            n.files = n.files.filter(x => x.id !== f.id);
+            n.updatedAt = Date.now();
+            attDelete(f.id);
+            saveNotes();
+            refreshNotesUI();
+        }
+
+        if (images.length) {
+            const grid = document.createElement('div');
+            const shown = Math.min(images.length, 6);
+            grid.className = 'att-thumbs n' + shown;
+            images.slice(0, shown).forEach((f, i) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'att-thumb';
+                b.title = f.name;
+                b.setAttribute('aria-label', 'Lihat foto ' + f.name);
+                const im = document.createElement('img');
+                im.alt = f.name;
+                im.loading = 'lazy';
+                b.appendChild(im);
+                const ui = progressUI(b);
+                attUrl(f.id).then(u => {
+                    if (u) { im.src = u; return; }
+                    b.classList.add('missing');
+                    b.title = 'File tidak ada di perangkat ini. Klik untuk memilih file lagi.';
+                });
+                b.addEventListener('click', () => {
+                    if (b.classList.contains('missing')) {
+                        if (confirm('Foto "' + f.name + '" tidak ada di perangkat ini.\n\nPilih file foto itu lagi dari perangkat?\n(Batal = biarkan)')) attRelink(f, ui);
+                    } else openViewer(images, i);
+                });
+                if (i === shown - 1 && images.length > shown) {
+                    const more = document.createElement('span');
+                    more.className = 'att-more';
+                    more.textContent = '+' + (images.length - shown + 1);
+                    b.appendChild(more);
+                }
+                grid.appendChild(b);
+            });
+            wrap.appendChild(grid);
+        }
+
+        others.forEach(f => {
+            const row = document.createElement('div');
+            row.className = 'att-file';
+            const badge = fileBadge(f.type, f.name);
+            const ico = document.createElement('div');
+            ico.className = 'att-file-ico';
+            ico.style.setProperty('--c', badge.color);
+            ico.textContent = badge.label;
+            const main = document.createElement('div');
+            main.className = 'att-file-main';
+            const name = document.createElement('div');
+            name.className = 'att-file-name';
+            name.textContent = f.name;
+            name.title = f.name;
+            const sub = document.createElement('small');
+            sub.className = 'att-file-sub';
+            sub.textContent = fmtSize(f.size);
+            main.append(name, sub);
+            const ui = progressUI(main);
+            const actions = document.createElement('div');
+            actions.className = 'att-file-actions';
+            const dl = document.createElement('button');
+            dl.type = 'button';
+            dl.className = 'att-file-btn';
+            dl.textContent = '⬇ Unduh';
+            dl.addEventListener('click', () => { dl.disabled = true; downloadAttachment(f, ui).then(() => { dl.disabled = false; }); });
+            actions.appendChild(dl);
+            const sh = document.createElement('button');
+            sh.type = 'button';
+            sh.className = 'att-share-btn';
+            sh.textContent = '📤 Bagikan';
+            sh.addEventListener('click', () => shareFile(f));
+            actions.appendChild(sh);
+            row.append(ico, main, actions);
+            wrap.appendChild(row);
+
+            // Cek apakah file masih ada di perangkat ini
+            attExists(f.id).then(ok => {
+                if (ok) return;
+                row.classList.add('missing');
+                sh.remove();
+                sub.textContent = '⚠ File tidak ada di perangkat ini';
+                dl.textContent = '📁 Pilih file lagi';
+                dl.onclick = null;
+                const fresh = dl.cloneNode(true);
+                dl.replaceWith(fresh);
+                fresh.addEventListener('click', () => attRelink(f, ui));
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'att-file-btn danger';
+                del.textContent = '✕ Hapus';
+                del.addEventListener('click', () => removeFromNote(f));
+                actions.appendChild(del);
+            });
+        });
+        return wrap;
+    }
+
+    // Editor: daftar lampiran yang sedang disiapkan
+    function attEditInit(existing) {
+        attEditReset();
+        editFiles = existing && existing.files ? existing.files.map(f => Object.assign({}, f)) : [];
+        renderEditFiles();
+    }
+
+    function attEditReset() {
+        editFiles.forEach(f => { f.cancelled = true; if (f.url) URL.revokeObjectURL(f.url); });
+        editFiles = [];
+        editRemoved = [];
+    }
+
+    function renderEditFiles() {
+        const list = document.getElementById('att-edit-list');
+        if (!list) return;
+        list.innerHTML = '';
+        editFiles.forEach(f => {
+            const item = document.createElement('div');
+            item.className = 'att-edit-item';
+            if (/^image\//.test(f.type) && !f.pending) {
+                const im = document.createElement('img');
+                im.alt = f.name;
+                if (f.url) im.src = f.url; else attUrl(f.id).then(u => { if (u) im.src = u; });
+                item.appendChild(im);
+            } else {
+                const ic = document.createElement('div');
+                const bd = fileBadge(f.type, f.name);
+                ic.className = 'att-edit-icon badge';
+                ic.style.setProperty('--c', bd.color);
+                ic.textContent = f.pending && /^image\//.test(f.type) ? '🖼️' : bd.label;
+                item.appendChild(ic);
+            }
+            const meta = document.createElement('div');
+            meta.className = 'att-edit-meta';
+            const n = document.createElement('div');
+            n.className = 'att-edit-name';
+            n.textContent = f.name;
+            const s = document.createElement('small');
+            s.textContent = fmtSize(f.size);
+            meta.append(n, s);
+            if (f.pending) {
+                const bar = document.createElement('div');
+                bar.className = 'att-progress';
+                const fill = document.createElement('div');
+                fill.className = 'att-progress-fill';
+                bar.appendChild(fill);
+                const pct = document.createElement('small');
+                pct.className = 'att-progress-text';
+                f.barEl = fill;
+                f.pctEl = pct;
+                meta.append(bar, pct);
+                updatePending(f);
+            }
+            item.appendChild(meta);
+            const rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'att-edit-remove';
+            rm.textContent = '✕';
+            rm.title = 'Hapus lampiran';
+            rm.setAttribute('aria-label', 'Hapus lampiran ' + f.name);
+            rm.addEventListener('click', () => {
+                if (f.pending) f.cancelled = true;
+                if (f.blob || f.pending) { if (f.url) URL.revokeObjectURL(f.url); } else editRemoved.push(f.id);
+                editFiles = editFiles.filter(x => x !== f);
+                renderEditFiles();
+            });
+            item.appendChild(rm);
+            list.appendChild(item);
+        });
+        const info = document.getElementById('att-info');
+        const base = editFiles.length ? `${editFiles.length} / ${ATT_MAX_FILES} lampiran` : '';
+        info.textContent = base;
+        try {
+            if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => {
+                if (e && e.quota) info.textContent = (base ? base + ' • ' : '') + 'Ruang tersisa ± ' + fmtSize(Math.max(0, e.quota - (e.usage || 0)));
+            });
+        } catch (e) {}
+    }
+
+    // Baca file dengan indikator persen (file sangat besar dilewati agar tidak memenuhi memori)
+    async function readWithProgress(file, onProgress) {
+        if (!file.stream || file.size > 300 * 1024 * 1024) { onProgress(100); return file; }
+        const reader = file.stream().getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            got += value.length;
+            onProgress(file.size ? Math.min(100, Math.round(got / file.size * 100)) : 100);
+        }
+        return new Blob(chunks, { type: file.type });
+    }
+
+    function updatePending(f) {
+        if (f.barEl) f.barEl.style.width = f.progress + '%';
+        if (f.pctEl) f.pctEl.textContent = f.stage + ' ' + (f.stage === 'Menunggu' ? '' : f.progress + '%');
+        const pend = editFiles.filter(x => x.pending);
+        const info = document.getElementById('att-info');
+        if (info && pend.length) {
+            const total = pend.reduce((a, x) => a + (x.size || 1), 0);
+            const done = pend.reduce((a, x) => a + (x.size || 1) * x.progress / 100, 0);
+            info.textContent = `Memproses ${pend.length} file… ${Math.round(done / total * 100)}%`;
+        }
+    }
+
+    async function attAddFiles(fileList) {
+        const err = document.getElementById('note-error');
+        err.textContent = '';
+        // Minta browser menyimpan data situs secara permanen (tidak dibersihkan otomatis saat ruang menipis)
+        try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+        const queue = [];
+        for (const file of Array.from(fileList)) {
+            if (editFiles.length >= ATT_MAX_FILES) { err.textContent = `Maksimal ${ATT_MAX_FILES} lampiran per catatan.`; break; }
+            const rec = { id: newNoteId(), name: (file.name || 'foto').slice(0, 120), type: file.type || 'application/octet-stream',
+                size: file.size, pending: true, progress: 0, stage: 'Menunggu' };
+            editFiles.push(rec);
+            queue.push({ file, rec });
+        }
+        renderEditFiles();
+        for (const { file, rec } of queue) {
+            if (rec.cancelled) continue;
+            try {
+                rec.stage = 'Membaca';
+                updatePending(rec);
+                const raw = await readWithProgress(file, p => { rec.progress = p; updatePending(rec); });
+                if (rec.cancelled) continue;
+                let blob = raw;
+                if (/^image\//.test(rec.type)) {
+                    rec.stage = 'Mengecilkan foto';
+                    updatePending(rec);
+                    blob = await compressImage(raw);
+                }
+                if (rec.cancelled) continue;
+                let name = rec.name;
+                if (blob !== raw && blob.type === 'image/jpeg') name = name.replace(/\.(png|webp|heic|heif|bmp)$/i, '') + (/\.jpe?g$/i.test(name) ? '' : '.jpg');
+                rec.name = name;
+                rec.type = blob !== raw && blob.type ? blob.type : rec.type;
+                rec.size = blob.size;
+                rec.blob = blob;
+                rec.progress = 100;
+                if (/^image\//.test(rec.type)) rec.url = URL.createObjectURL(blob);
+                delete rec.pending;
+            } catch (e) {
+                editFiles = editFiles.filter(x => x !== rec);
+                err.textContent = `"${rec.name}" gagal dibaca.`;
+            }
+            renderEditFiles();
+        }
+        renderEditFiles();
+    }
+
+    function sanitizeFiles(arr) {
+        if (!Array.isArray(arr)) return [];
+        return arr.slice(0, ATT_MAX_FILES).map(f => f && typeof f === 'object' && f.id ? {
+            id: String(f.id).slice(0, 40),
+            name: String(f.name || 'file').slice(0, 120),
+            type: String(f.type || 'application/octet-stream').slice(0, 100),
+            size: Math.max(0, Number(f.size) || 0)
+        } : null).filter(Boolean);
+    }
+
+    function blobToDataUrl(blob) {
+        return new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(r.result);
+            r.onerror = () => rej(r.error);
+            r.readAsDataURL(blob);
+        });
+    }
+
+    async function collectAttachmentsForExport() {
+        const out = {};
+        for (const key of Object.keys(notes)) {
+            for (const n of notes[key]) {
+                for (const f of n.files || []) {
+                    try {
+                        const rec = await attGet(f.id);
+                        if (rec && rec.blob) out[f.id] = { name: f.name, type: f.type, dataUrl: await blobToDataUrl(rec.blob) };
+                    } catch (e) { /* lampiran hilang: dilewati */ }
+                }
+            }
+        }
+        return out;
+    }
+
+    // Pulihkan lampiran dari backup; lampiran yang datanya tidak ada dibuang dari catatan
+    async function restoreImportedAttachments(freshNotes, source) {
+        for (const x of freshNotes) {
+            const kept = [];
+            for (const f of x.note.files || []) {
+                const a = source && source[f.id];
+                if (!a || typeof a.dataUrl !== 'string') continue;
+                try {
+                    const blob = await (await fetch(a.dataUrl)).blob();
+                    await attPut(f.id, blob, f.name, f.type);
+                    kept.push(Object.assign({}, f, { size: blob.size }));
+                } catch (e) { /* dilewati */ }
+            }
+            x.note.files = kept;
+        }
+    }
+
+    // ===== Bagikan catatan / file =====
+    function noteShareText(key, note) {
+        const parts = [];
+        if (note.title.trim()) parts.push('📝 ' + note.title.trim());
+        parts.push('📅 ' + noteDateLabel(key));
+        if (note.body.trim()) parts.push('', note.body.trim());
+        if (note.files && note.files.length) parts.push('', '📎 ' + note.files.length + ' lampiran');
+        return parts.join('\n');
+    }
+
+    function showToast(msg) {
+        let el = document.getElementById('app-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'app-toast';
+            el.className = 'app-toast';
+            el.setAttribute('role', 'status');
+            document.body.appendChild(el);
+        }
+        el.textContent = msg;
+        el.classList.add('show');
+        clearTimeout(showToast._t);
+        showToast._t = setTimeout(() => el.classList.remove('show'), 4500);
+    }
+
+    async function attToFile(f) {
+        const rec = await attGet(f.id);
+        return rec && rec.blob ? new File([rec.blob], f.name, { type: f.type || rec.blob.type }) : null;
+    }
+
+    // Menu bagikan bawaan perangkat (WhatsApp, Instagram, TikTok, Gmail, dll.); jika tidak ada, tampilkan pilihan manual
+    async function doShare(title, text, fileMetas) {
+        const files = [];
+        let missing = 0;
+        for (const m of fileMetas || []) {
+            try { const f = await attToFile(m); if (f) files.push(f); else missing++; } catch (e) { missing++; }
+        }
+        if (missing) showToast(`${missing} file tidak ada di perangkat ini dan tidak ikut dibagikan.`);
+        if (navigator.share) {
+            try {
+                if (files.length && navigator.canShare && navigator.canShare({ files })) {
+                    await navigator.share({ title, text, files });
+                    return;
+                }
+                if (files.length) showToast('Perangkat ini tidak bisa membagikan file langsung, jadi hanya teks yang dibagikan.');
+                await navigator.share({ title, text });
+                return;
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;      // pengguna membatalkan
+            }
+        }
+        openShareFallback(title, text, (fileMetas || []));
+    }
+
+    function shareNote(key, note) {
+        doShare(note.title.trim() || 'Catatan ' + noteDateLabel(key, true), noteShareText(key, note), note.files);
+    }
+
+    function shareFile(f) {
+        doShare(f.name, f.name, [f]);
+    }
+
+    function openShareFallback(title, text, fileMetas) {
+        const $ = x => document.getElementById(x);
+        $('share-text').value = text;
+        const enc = encodeURIComponent;
+        $('share-wa').href = 'https://wa.me/?text=' + enc(text);
+        $('share-tg').href = 'https://t.me/share/url?url=%20&text=' + enc(text);
+        $('share-mail').href = 'mailto:?subject=' + enc(title) + '&body=' + enc(text);
+        const list = $('share-files');
+        list.innerHTML = '';
+        if (fileMetas.length) {
+            const h = document.createElement('div');
+            h.className = 'att-hint';
+            h.textContent = 'File tidak bisa dikirim langsung dari sini. Unduh dulu, lalu lampirkan manual di aplikasi tujuan:';
+            list.appendChild(h);
+            fileMetas.forEach(f => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'att-file-btn';
+                b.textContent = '⬇ ' + f.name;
+                b.addEventListener('click', () => downloadAttachment(f, null));
+                list.appendChild(b);
+            });
+        }
+        $('share-modal').style.display = 'flex';
+    }
+
+    function closeShare() { const m = document.getElementById('share-modal'); if (m) m.style.display = 'none'; }
 
     function initNotes() {
         const $ = x => document.getElementById(x);
@@ -1258,12 +1922,34 @@ document.addEventListener('DOMContentLoaded', function() {
         $('note-body').addEventListener('keydown', e => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('note-form').requestSubmit(); }
         });
+        $('att-add').addEventListener('click', () => $('att-input').click());
+        const dropBox = document.querySelector('#note-modal .note-editor');
+        ['dragenter', 'dragover'].forEach(ev => dropBox.addEventListener(ev, e => { e.preventDefault(); dropBox.classList.add('dragging'); }));
+        ['dragleave', 'drop'].forEach(ev => dropBox.addEventListener(ev, e => { e.preventDefault(); dropBox.classList.remove('dragging'); }));
+        dropBox.addEventListener('drop', e => { if (e.dataTransfer && e.dataTransfer.files.length) attAddFiles(e.dataTransfer.files); });
+        $('att-input').addEventListener('change', e => { attAddFiles(e.target.files).then(() => { e.target.value = ''; }); });
+        $('att-viewer-close').addEventListener('click', closeViewer);
+        $('att-viewer-share').addEventListener('click', () => { if (viewerList[viewerIdx]) shareFile(viewerList[viewerIdx]); });
+        $('share-close').addEventListener('click', closeShare);
+        $('share-modal').addEventListener('click', e => { if (e.target === $('share-modal')) closeShare(); });
+        $('share-copy').addEventListener('click', () => {
+            const txt = $('share-text').value;
+            (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(
+                () => showToast('Teks disalin.'),
+                () => { $('share-text').select(); try { document.execCommand('copy'); showToast('Teks disalin.'); } catch (e) { showToast('Tekan Ctrl+C untuk menyalin.'); } });
+        });
+        $('att-viewer-prev').addEventListener('click', () => stepViewer(-1));
+        $('att-viewer-next').addEventListener('click', () => stepViewer(1));
+        $('att-viewer').addEventListener('click', e => { if (e.target === $('att-viewer') || e.target.classList.contains('att-viewer-box')) closeViewer(); });
         $('note-delete').addEventListener('click', () => {
             if (editingNote && deleteNote(editingNote.key, editingNote.id)) closeNoteEditor();
         });
         document.addEventListener('keydown', e => {
+            if (isShown('att-viewer') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) stepViewer(e.key === 'ArrowLeft' ? -1 : 1);
             if (e.key !== 'Escape') return;
-            if (isShown('note-modal')) closeNoteEditor();
+            if (isShown('share-modal')) closeShare();
+            else if (isShown('att-viewer')) closeViewer();
+            else if (isShown('note-modal')) closeNoteEditor();
             else if (isShown('notes-book-modal')) closeNotesBook();
         });
 
